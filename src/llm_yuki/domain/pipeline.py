@@ -29,13 +29,22 @@ class Extractor(abc.ABC):
     """Algorithm 1 lines 1-3: ``SelectPages`` + ``CompileWikiPages`` for one passage (proposal §2.2.1)."""
 
     @abc.abstractmethod
-    def select_pages(self, passage: str, writer: Writer) -> list[str]:
-        """``S ← SelectPages(x, I)``: existing page slugs relevant to this passage."""
+    def select_pages(self, passage: str, writer: Writer, batch_id: int) -> list[str]:
+        """``S ← SelectPages(x, I)``: existing page slugs relevant to this passage.
+
+        ``batch_id`` identifies this call for cost-ledger recording (D19) — it plays no role in the
+        selection logic itself.
+        """
         raise NotImplementedError
 
     @abc.abstractmethod
-    def compile_wiki_pages(self, passage: str, selected: list[str], constraints: list[str]) -> CompiledUpdate:
-        """``U ← CompileWikiPages(x, S, C)``: candidate Claim/Concept pages for this passage."""
+    def compile_wiki_pages(
+        self, passage: str, selected: list[str], constraints: list[str], batch_id: int
+    ) -> CompiledUpdate:
+        """``U ← CompileWikiPages(x, S, C)``: candidate Claim/Concept pages for this passage.
+
+        ``batch_id``: see :meth:`select_pages`.
+        """
         raise NotImplementedError
 
 
@@ -61,8 +70,11 @@ class Validator(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def content_validate(self, update: CompiledUpdate, writer: Writer) -> list[ValidationIssue]:
-        """``E_c ← ContentValidate(U, W, A)``: LLM-based checks (unsupported facts, cross-page contradictions)."""
+    def content_validate(self, update: CompiledUpdate, writer: Writer, batch_id: int) -> list[ValidationIssue]:
+        """``E_c ← ContentValidate(U, W, A)``: LLM-based checks (unsupported facts, cross-page contradictions).
+
+        ``batch_id``: see :meth:`Extractor.select_pages`.
+        """
         raise NotImplementedError
 
 
@@ -75,8 +87,11 @@ class Fixer(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def llm_periodic_fix(self, error_book: ErrorBook, writer: Writer) -> None:
-        """``W ← LLMPeriodicFix(W, ℬ)``: LLM-driven repair of content issues, run every N batches (§4.3)."""
+    def llm_periodic_fix(self, error_book: ErrorBook, writer: Writer, batch_id: int) -> None:
+        """``W ← LLMPeriodicFix(W, ℬ)``: LLM-driven repair of content issues, run every N batches (§4.3).
+
+        ``batch_id``: see :meth:`Extractor.select_pages`.
+        """
         raise NotImplementedError
 
 
@@ -114,17 +129,17 @@ class Orchestrator:
             self._compile_passage(document, constraints, batch_id)
 
         if self._error_book.periodic_fix_due(batch_id):
-            self._fixer.llm_periodic_fix(self._error_book, self._writer)
+            self._fixer.llm_periodic_fix(self._error_book, self._writer, batch_id)
             self._error_book.verify_and_close(self._writer, batch_id)
 
     def _compile_passage(self, document: Document, constraints: list[str], batch_id: int) -> None:
         """Algorithm 1 lines 1-12 for a single source passage."""
-        selected = self._extractor.select_pages(document.text, self._writer)
-        update = self._extractor.compile_wiki_pages(document.text, selected, constraints)
+        selected = self._extractor.select_pages(document.text, self._writer, batch_id)
+        update = self._extractor.compile_wiki_pages(document.text, selected, constraints, batch_id)
         update = self._merger.merge(update, self._writer)
 
         structural_issues = self._validator.structural_validate(update, selected, self._writer)
-        content_issues = self._validator.content_validate(update, self._writer)
+        content_issues = self._validator.content_validate(update, self._writer, batch_id)
         issues = structural_issues + content_issues
 
         if issues:

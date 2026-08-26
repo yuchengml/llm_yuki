@@ -160,4 +160,4 @@ def test_content_validate_without_llm_client_raises_runtime_error() -> None:
     update = CompiledUpdate()
 
     with pytest.raises(RuntimeError):
-        DefaultValidator().content_validate(update, _FakeWriter())
+        DefaultValidator().content_validate(update, _FakeWriter(), batch_id=1)

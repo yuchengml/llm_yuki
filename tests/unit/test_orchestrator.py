@@ -50,10 +50,12 @@ class _FakeWriter(Writer):
 
 
 class _FakeExtractor(Extractor):
-    def select_pages(self, passage: str, writer: Writer) -> list[str]:
+    def select_pages(self, passage: str, writer: Writer, batch_id: int) -> list[str]:
         return []
 
-    def compile_wiki_pages(self, passage: str, selected: list[str], constraints: list[str]) -> CompiledUpdate:
+    def compile_wiki_pages(
+        self, passage: str, selected: list[str], constraints: list[str], batch_id: int
+    ) -> CompiledUpdate:
         return CompiledUpdate(
             claims=[
                 Claim(
@@ -77,7 +79,7 @@ class _NoopValidator(Validator):
     def structural_validate(self, update: CompiledUpdate, selected: list[str], writer: Writer) -> list[ValidationIssue]:
         return []
 
-    def content_validate(self, update: CompiledUpdate, writer: Writer) -> list[ValidationIssue]:
+    def content_validate(self, update: CompiledUpdate, writer: Writer, batch_id: int) -> list[ValidationIssue]:
         return []
 
 
@@ -85,7 +87,7 @@ class _NoopFixer(Fixer):
     def code_auto_fix(self, update: CompiledUpdate, structural_issues: list[ValidationIssue]) -> CompiledUpdate:
         return update
 
-    def llm_periodic_fix(self, error_book: ErrorBook, writer: Writer) -> None:
+    def llm_periodic_fix(self, error_book: ErrorBook, writer: Writer, batch_id: int) -> None:
         raise AssertionError("should not be called when periodic_fix_due is False")
 
 

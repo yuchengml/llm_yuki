@@ -35,8 +35,9 @@ class DefaultValidator(Validator):
         issues.extend(self._check_index_inconsistency(update, writer))
         return issues
 
-    def content_validate(self, update: CompiledUpdate, writer: Writer) -> list[ValidationIssue]:
+    def content_validate(self, update: CompiledUpdate, writer: Writer, batch_id: int) -> list[ValidationIssue]:
         """LLM-based checks: unsupported facts, cross-page contradictions (proposal §4.1 #6-7)."""
+        del batch_id  # unused until this method is implemented (TODO.md §B)
         if self._llm_client is None:
             raise RuntimeError(
                 "DefaultValidator.content_validate requires an llm_client (see ARCHITECTURE.md §2.1, TODO.md §B)"

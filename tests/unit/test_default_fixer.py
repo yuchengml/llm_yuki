@@ -120,4 +120,4 @@ class _FakeWriter(Writer):
 
 def test_llm_periodic_fix_without_llm_client_raises_runtime_error() -> None:
     with pytest.raises(RuntimeError):
-        DefaultFixer().llm_periodic_fix(ErrorBook(), _FakeWriter())
+        DefaultFixer().llm_periodic_fix(ErrorBook(), _FakeWriter(), batch_id=1)

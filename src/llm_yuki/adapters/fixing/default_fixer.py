@@ -44,8 +44,9 @@ class DefaultFixer(Fixer):
         ]
         return CompiledUpdate(claims=claims, concepts=concepts)
 
-    def llm_periodic_fix(self, error_book: ErrorBook, writer: Writer) -> None:
+    def llm_periodic_fix(self, error_book: ErrorBook, writer: Writer, batch_id: int) -> None:
         """``W ← LLMPeriodicFix(W, ℬ)``: LLM-driven repair of content issues, run every N batches (§4.3)."""
+        del batch_id  # unused until this method is implemented (TODO.md §B)
         if self._llm_client is None:
             raise RuntimeError(
                 "DefaultFixer.llm_periodic_fix requires an llm_client (see ARCHITECTURE.md §2.1, TODO.md §B)"

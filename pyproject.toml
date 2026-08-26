@@ -9,6 +9,7 @@ requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.9",
     "pyyaml>=6.0",
+    "openai>=1.50",
 ]
 
 [tool.poetry]
