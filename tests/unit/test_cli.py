@@ -39,11 +39,12 @@ def test_no_command_exits_nonzero() -> None:
 
 
 def test_main_compile_fails_fast_without_llm_config(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     monkeypatch.delenv("LLM_MODEL", raising=False)
+    monkeypatch.chdir(tmp_path)  # isolate from any real .env a developer might have in the repo root
 
     exit_code = main(["compile", "raw_sources", "bundle"])
 

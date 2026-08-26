@@ -5,7 +5,8 @@ Pipeline execution is exposed as a CLI first — no web/API service is planned f
 `Extractor`/`Validator`/`Fixer` and the deterministic `Merger`/`ErrorBook` into a real `Orchestrator` and
 runs one batch. LLM configuration (`OPENAI_API_KEY`/`OPENAI_BASE_URL`/`LLM_MODEL`) is validated *before*
 anything else runs, so a missing/misconfigured endpoint fails immediately with a clear message rather than
-partway through a batch.
+partway through a batch. A `.env` file (see `.env.example`) is loaded automatically from the current or a
+parent directory — real environment variables always take precedence over it.
 """
 
 from __future__ import annotations
@@ -13,6 +14,8 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+
+from dotenv import find_dotenv, load_dotenv
 
 from llm_yuki.adapters.connectors.txt_file_connector import TxtFileConnector
 from llm_yuki.adapters.cost_ledger import JsonlCostLedger
@@ -50,6 +53,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint. Returns the process exit code."""
+    # Search from the current working directory upward (usecwd=True) — not from this file's location,
+    # which is python-dotenv's default and would search the package's install path instead of wherever
+    # the user actually ran the command from.
+    load_dotenv(find_dotenv(usecwd=True))
     args = build_parser().parse_args(argv)
 
     if args.command == "compile":

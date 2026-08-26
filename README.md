@@ -158,15 +158,16 @@ poetry install
 
 ```bash
 cp .env.example .env   # fill in OPENAI_API_KEY / OPENAI_BASE_URL / LLM_MODEL — see ARCHITECTURE.md §2.1
-export $(grep -v '^#' .env | xargs)
 poetry run llm-yuki compile <source_dir> <bundle_dir>
 ```
 
-Runs one compile batch (Algorithm 1) over `<source_dir>` (a Raw Sources folder — one subfolder per document,
-each with a `.txt` body) and writes the resulting OKF bundle to `<bundle_dir>`. Pipeline-internal state
-(`error_book.yaml`, `cost_ledger.jsonl`) is written to a `pipeline-state` sibling of `<bundle_dir>` by default
-(override with `--pipeline-state-dir`). Missing LLM configuration fails immediately at startup with a clear
-message, not partway through a batch. See `ARCHITECTURE.md` §5.
+`.env` (in the directory you run the command from, or a parent of it) is loaded automatically — no need to
+`export` it into the shell yourself; a real environment variable always takes precedence over the `.env`
+value if both are set. Runs one compile batch (Algorithm 1) over `<source_dir>` (a Raw Sources folder — one
+subfolder per document, each with a `.txt` body) and writes the resulting OKF bundle to `<bundle_dir>`.
+Pipeline-internal state (`error_book.yaml`, `cost_ledger.jsonl`) is written to a `pipeline-state` sibling of
+`<bundle_dir>` by default (override with `--pipeline-state-dir`). Missing LLM configuration fails immediately
+at startup with a clear message, not partway through a batch. See `ARCHITECTURE.md` §5.
 
 ## Run Tests
 

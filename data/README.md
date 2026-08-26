@@ -19,8 +19,7 @@ data/
 ## Try it
 
 ```bash
-cp .env.example .env   # fill in OPENAI_API_KEY / OPENAI_BASE_URL / LLM_MODEL
-export $(grep -v '^#' .env | xargs)
+cp .env.example .env   # fill in OPENAI_API_KEY / OPENAI_BASE_URL / LLM_MODEL — loaded automatically, no export needed
 poetry run llm-yuki compile data/raw_sources data/bundle
 ```
 
