@@ -1,10 +1,11 @@
 """Command-line entrypoint for running the compile pipeline.
 
 Pipeline execution is exposed as a CLI first — no web/API service is planned for this POC (see root
-`ARCHITECTURE.md` §5). This wires the already-implemented `Connector`/`Writer` adapters, but
-`Extractor`/`Merger`/`Validator`/`ErrorBook`/`Fixer` are still interface stubs (see `TODO.md` section B) —
-`Orchestrator` cannot be constructed without concrete implementations of those, so `compile` fails fast with
-a clear error instead of silently doing nothing.
+`ARCHITECTURE.md` §5). Wires the `Connector`/`Writer` adapters together with the LLM-backed
+`Extractor`/`Validator`/`Fixer` and the deterministic `Merger`/`ErrorBook` into a real `Orchestrator` and
+runs one batch. LLM configuration (`OPENAI_API_KEY`/`OPENAI_BASE_URL`/`LLM_MODEL`) is validated *before*
+anything else runs, so a missing/misconfigured endpoint fails immediately with a clear message rather than
+partway through a batch.
 """
 
 from __future__ import annotations
@@ -12,6 +13,17 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+
+from llm_yuki.adapters.connectors.txt_file_connector import TxtFileConnector
+from llm_yuki.adapters.cost_ledger import JsonlCostLedger
+from llm_yuki.adapters.fixing.default_fixer import DefaultFixer
+from llm_yuki.adapters.llm.client import LLMConfigError, OpenAICompatibleClient
+from llm_yuki.adapters.llm.extractor import LLMExtractor
+from llm_yuki.adapters.merging.default_merger import DefaultMerger
+from llm_yuki.adapters.state.error_book_store import YamlErrorBookStore
+from llm_yuki.adapters.validation.default_validator import DefaultValidator
+from llm_yuki.adapters.writers.markdown_writer import MarkdownWriter
+from llm_yuki.domain.pipeline import Orchestrator
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -25,6 +37,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     compile_parser.add_argument("bundle_dir", type=Path, help="Output OKF bundle directory.")
     compile_parser.add_argument("--batch-id", type=int, default=1, help="Batch identifier (default: 1).")
+    compile_parser.add_argument(
+        "--pipeline-state-dir",
+        type=Path,
+        default=None,
+        help="Directory for pipeline-internal state (error_book.yaml, cost_ledger.jsonl). "
+        "Defaults to a 'pipeline-state' sibling of bundle_dir.",
+    )
 
     return parser
 
@@ -34,25 +53,38 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     if args.command == "compile":
-        return _run_compile(args.source_dir, args.bundle_dir, args.batch_id)
+        pipeline_state_dir = args.pipeline_state_dir or (args.bundle_dir.parent / "pipeline-state")
+        return _run_compile(args.source_dir, args.bundle_dir, pipeline_state_dir, args.batch_id)
 
     raise AssertionError(f"unhandled command: {args.command}")  # unreachable: argparse enforces required=True
 
 
-def _run_compile(source_dir: Path, bundle_dir: Path, batch_id: int) -> int:
-    """Wire Connector/Writer into the Orchestrator and run one batch.
+def _run_compile(source_dir: Path, bundle_dir: Path, pipeline_state_dir: Path, batch_id: int) -> int:
+    """Wire every pipeline stage into a real ``Orchestrator`` and run one batch."""
+    try:
+        llm_client = OpenAICompatibleClient.from_env()
+    except LLMConfigError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
 
-    Not yet functional: `Extractor`/`Merger`/`Validator`/`ErrorBook`/`Fixer` have no concrete implementation
-    (`TODO.md` section B), and `Orchestrator` requires all five. Fails immediately rather than partially
-    running the pipeline or silently no-op-ing.
-    """
-    del source_dir, bundle_dir, batch_id  # not yet used — see docstring
-    print(
-        "error: compile pipeline logic (Extractor/Merger/Validator/ErrorBook/Fixer) is not implemented yet — "
-        "see TODO.md section B for the remaining work.",
-        file=sys.stderr,
+    connector = TxtFileConnector(source_dir)
+    writer = MarkdownWriter(bundle_dir)
+    cost_ledger = JsonlCostLedger(pipeline_state_dir)
+    error_book_store = YamlErrorBookStore(pipeline_state_dir)
+    error_book = error_book_store.load()
+
+    orchestrator = Orchestrator(
+        connector=connector,
+        writer=writer,
+        extractor=LLMExtractor(llm_client, cost_ledger),
+        merger=DefaultMerger(),
+        validator=DefaultValidator(llm_client, cost_ledger),
+        fixer=DefaultFixer(llm_client, cost_ledger),
+        error_book=error_book,
     )
-    return 1
+    orchestrator.run_batch(batch_id)
+    error_book_store.save(error_book)
+    return 0
 
 
 if __name__ == "__main__":

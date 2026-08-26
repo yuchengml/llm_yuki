@@ -154,8 +154,13 @@ class Orchestrator:
         self._apply_updates(update)
 
     def _apply_updates(self, update: CompiledUpdate) -> None:
-        """Algorithm 1 line 12: ``W ← ApplyUpdates(W, U)``."""
-        for claim in update.claims:
-            self._writer.write_claim(claim)
+        """Algorithm 1 line 12: ``W ← ApplyUpdates(W, U)``.
+
+        Concepts before claims: ``Writer.write_claim``'s backlink maintenance (proposal ARCHITECTURE.md
+        §2.3.2) looks up each ``related_concepts`` target and skips it if that Concept isn't persisted yet
+        — writing claims first would silently drop the backlink for any Concept created in this same batch.
+        """
         for concept in update.concepts:
             self._writer.write_concept(concept)
+        for claim in update.claims:
+            self._writer.write_claim(claim)

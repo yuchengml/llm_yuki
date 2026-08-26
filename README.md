@@ -40,9 +40,11 @@
 ```text
 llm_yuki/
 ├── src/llm_yuki/
-│   ├── domain/          # Orchestrator + Extractor/Merger/Validator/ErrorBook/Fixer — no I/O
+│   ├── domain/          # Orchestrator + abstract Extractor/Merger/Validator/ErrorBook/Fixer — no I/O
 │   ├── ports/            # Connector / Writer abstract interfaces
-│   └── adapters/          # Concrete Connector/Writer implementations (I/O lives here)
+│   ├── adapters/          # Concrete implementations (I/O lives here): connectors/, writers/, llm/,
+│   │                       #   validation/, fixing/, merging/, state/, cost_ledger.py
+│   └── cli.py            # `llm-yuki` entrypoint — wires adapters into a real Orchestrator
 ├── tests/
 │   ├── unit/
 │   ├── integration/
@@ -59,6 +61,8 @@ llm_yuki/
 ├── pyproject.toml
 ├── Makefile
 ├── README.md
+├── TODO.md
+├── .env.example
 ├── AGENTS.md
 ├── CLAUDE.md
 ├── ARCHITECTURE.md
@@ -107,26 +111,30 @@ bundle/ (OKF-conformant markdown)
 
 # POC Status
 
-This project is at the **scaffolding** stage: `SPEC.md` is decided (2026-08-26), the repository is initialized
-per the AI-Native Repository Standard, and the pipeline modules exist as typed skeletons:
+`SPEC.md` is decided (2026-08-26), the repository is initialized per the AI-Native Repository Standard, and
+the full compile pipeline (Algorithm 1) is implemented end to end and wired to a CLI:
 
-- **Implemented**:
-  - `Claim`/`Concept` entities — the shared OKF typed-frontmatter core types (`domain/entities.py`)
-  - `TxtFileConnector` — reads Raw Sources from a `txt` + `images/` folder layout (`adapters/connectors/`)
-  - `MarkdownWriter` — writes OKF-conformant markdown, renders body links, maintains backlinks
-    (`adapters/writers/`)
-  - `Orchestrator` control flow — the Algorithm 1 call sequence is wired up and testable, but calls into the
-    stubs below (`domain/pipeline.py`)
-  - `llm-yuki` CLI scaffold — pipeline execution is exposed as a CLI first, no web/API service planned
-    (`src/llm_yuki/cli.py`, see `ARCHITECTURE.md` §5); `compile` fails fast until the stubs below exist
-- **Stubbed (interface/types only, logic raises `NotImplementedError`, pending LLM-backed implementation)**:
-  `Extractor`, `Merger`, `Validator`, `ErrorBook`, `Fixer`
+- **Core types**: `Claim`/`Concept` — the shared OKF typed-frontmatter core types (`domain/entities.py`)
+- **`Connector`**: `TxtFileConnector` — reads Raw Sources from a `txt` + `images/` folder layout
+  (`adapters/connectors/`)
+- **`Writer`**: `MarkdownWriter` — writes OKF-conformant markdown, renders body links, maintains backlinks
+  (`adapters/writers/`)
+- **`Extractor`**: `LLMExtractor` — LLM-backed `SelectPages`/`CompileWikiPages` (`adapters/llm/extractor.py`)
+- **`Merger`**: `DefaultMerger` — deterministic slug-exact dedupe (`adapters/merging/`)
+- **`Validator`**: `DefaultValidator` — deterministic structural checks (5 types) + LLM-backed content checks
+  (2 types) (`adapters/validation/`)
+- **`Fixer`**: `DefaultFixer` — deterministic auto-fix + LLM-backed periodic fix (`adapters/fixing/`)
+- **`ErrorBook`**: full five-phase lifecycle + YAML persistence (`domain/error_book.py`,
+  `adapters/state/error_book_store.py`)
+- **Cost tracking**: `JsonlCostLedger` records every LLM call's token usage/latency (`adapters/cost_ledger.py`)
+- **`Orchestrator`**: runs the whole Algorithm 1 loop over these (`domain/pipeline.py`)
+- **`llm-yuki` CLI**: `compile` wires all of the above into a real `Orchestrator` and runs one batch
+  (`src/llm_yuki/cli.py`, see `ARCHITECTURE.md` §5)
 
-See [`TODO.md`](./TODO.md) for the full, itemized task list to take this from scaffolding to a validated POC
-(core logic to implement, test coverage gaps, known risks, and the SPEC.md validation experiments still
-outstanding). See [`.ai/workflows/feature-development.md`](./.ai/workflows/feature-development.md) for how to
-pick up an individual piece, and `ASSUMPTIONS.md` in the proposal for known open risks (esp. B-1: the
-deepagents skill extension point is unverified).
+Not yet built: the SPEC.md validation experiments themselves (running real `M3SciQA`/`MMDocRAG` data through
+this and measuring against the Success Criteria) — see [`TODO.md`](./TODO.md) §E for what's left. See
+`ASSUMPTIONS.md` in the proposal for known open risks (esp. B-1: the deepagents skill extension point is
+unverified — this POC's adapters are all built-in code, not deepagents skills).
 
 ---
 
@@ -149,11 +157,16 @@ poetry install
 ## Run the CLI
 
 ```bash
+cp .env.example .env   # fill in OPENAI_API_KEY / OPENAI_BASE_URL / LLM_MODEL — see ARCHITECTURE.md §2.1
+export $(grep -v '^#' .env | xargs)
 poetry run llm-yuki compile <source_dir> <bundle_dir>
 ```
 
-`compile` currently exits with an error pointing at `TODO.md` §B — the domain logic it depends on
-(`Extractor`/`Merger`/`Validator`/`ErrorBook`/`Fixer`) isn't implemented yet. See `ARCHITECTURE.md` §5.
+Runs one compile batch (Algorithm 1) over `<source_dir>` (a Raw Sources folder — one subfolder per document,
+each with a `.txt` body) and writes the resulting OKF bundle to `<bundle_dir>`. Pipeline-internal state
+(`error_book.yaml`, `cost_ledger.jsonl`) is written to a `pipeline-state` sibling of `<bundle_dir>` by default
+(override with `--pipeline-state-dir`). Missing LLM configuration fails immediately at startup with a clear
+message, not partway through a batch. See `ARCHITECTURE.md` §5.
 
 ## Run Tests
 
