@@ -86,3 +86,13 @@ D3) — without touching the `Orchestrator`.
   conformance enforceable in one place.
 - No mixing of `pipeline-state/` (internal, e.g. `error_book.yaml`, `cost_ledger.jsonl`) into `bundle/`
   (must pass OKF conformance) — see proposal `ARCHITECTURE.md` §4.4.
+
+---
+
+## 5. Execution Interface
+
+Pipeline execution is exposed as a **CLI first** — `llm_yuki.cli` (installed as the `llm-yuki` script; see
+`pyproject.toml` `[tool.poetry.scripts]`). No web/API service is planned for this POC. The `compile`
+subcommand wires `Connector`/`Writer` into the `Orchestrator`; until `Extractor`/`Merger`/`Validator`/
+`ErrorBook`/`Fixer` have concrete implementations (`TODO.md` §B), it fails fast with a clear error rather
+than partially running.

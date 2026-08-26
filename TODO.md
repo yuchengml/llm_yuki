@@ -48,6 +48,15 @@ All of these currently raise `NotImplementedError` or are undefined; see
       (Algorithm 1 line 15, §4.3)
 - [ ] `cost_ledger.jsonl` recording (D19) — append-only token usage + wall-clock time per pipeline stage
       (proposal `ARCHITECTURE.md` §7)
+- [ ] LLM client config/env plumbing — running the pipeline is not optional-API: any batch that reaches
+      `Extractor.compile_wiki_pages`/`Validator.content_validate`/`Fixer.llm_periodic_fix` needs a working
+      endpoint. Needs an API key + base URL (env vars, e.g. `OPENAI_API_KEY`/`OPENAI_BASE_URL`, per
+      `ARCHITECTURE.md` §2.1), a documented `.env.example`, and a clear startup-time error (not a late
+      per-call failure) when unset — never a silent default pointing at a real paid endpoint.
+- [ ] Wire `llm_yuki.cli compile` to a real `Orchestrator` once all of the above are implemented — the CLI
+      scaffold exists (`src/llm_yuki/cli.py`, `llm-yuki compile <source_dir> <bundle_dir>`, see
+      `ARCHITECTURE.md` §5) but currently fails fast with an explicit error, since `Orchestrator` cannot be
+      constructed without concrete `Extractor`/`Merger`/`Validator`/`ErrorBook`/`Fixer`.
 
 ## C. Test coverage gaps (ASSUMPTIONS.md §C)
 

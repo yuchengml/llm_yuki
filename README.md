@@ -117,6 +117,8 @@ per the AI-Native Repository Standard, and the pipeline modules exist as typed s
     (`adapters/writers/`)
   - `Orchestrator` control flow — the Algorithm 1 call sequence is wired up and testable, but calls into the
     stubs below (`domain/pipeline.py`)
+  - `llm-yuki` CLI scaffold — pipeline execution is exposed as a CLI first, no web/API service planned
+    (`src/llm_yuki/cli.py`, see `ARCHITECTURE.md` §5); `compile` fails fast until the stubs below exist
 - **Stubbed (interface/types only, logic raises `NotImplementedError`, pending LLM-backed implementation)**:
   `Extractor`, `Merger`, `Validator`, `ErrorBook`, `Fixer`
 
@@ -143,6 +145,15 @@ cd llm_yuki
 
 poetry install
 ```
+
+## Run the CLI
+
+```bash
+poetry run llm-yuki compile <source_dir> <bundle_dir>
+```
+
+`compile` currently exits with an error pointing at `TODO.md` §B — the domain logic it depends on
+(`Extractor`/`Merger`/`Validator`/`ErrorBook`/`Fixer`) isn't implemented yet. See `ARCHITECTURE.md` §5.
 
 ## Run Tests
 
