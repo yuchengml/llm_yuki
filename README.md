@@ -110,13 +110,21 @@ bundle/ (OKF-conformant markdown)
 This project is at the **scaffolding** stage: `SPEC.md` is decided (2026-08-26), the repository is initialized
 per the AI-Native Repository Standard, and the pipeline modules exist as typed skeletons:
 
-- **Implemented**: `Claim`/`Concept` entities, `TxtFileConnector`, `MarkdownWriter`
-- **Stubbed (interface only, pending LLM-backed implementation)**: `Extractor`, `Merger`, `Validator`,
-  `ErrorBook`, `Fixer`, `Orchestrator`
+- **Implemented**:
+  - `Claim`/`Concept` entities — the shared OKF typed-frontmatter core types (`domain/entities.py`)
+  - `TxtFileConnector` — reads Raw Sources from a `txt` + `images/` folder layout (`adapters/connectors/`)
+  - `MarkdownWriter` — writes OKF-conformant markdown, renders body links, maintains backlinks
+    (`adapters/writers/`)
+  - `Orchestrator` control flow — the Algorithm 1 call sequence is wired up and testable, but calls into the
+    stubs below (`domain/pipeline.py`)
+- **Stubbed (interface/types only, logic raises `NotImplementedError`, pending LLM-backed implementation)**:
+  `Extractor`, `Merger`, `Validator`, `ErrorBook`, `Fixer`
 
-See [`.ai/workflows/feature-development.md`](./.ai/workflows/feature-development.md) for how to pick up the
-next piece, and `ASSUMPTIONS.md` in the proposal for known open risks (esp. B-1: the deepagents skill
-extension point is unverified).
+See [`TODO.md`](./TODO.md) for the full, itemized task list to take this from scaffolding to a validated POC
+(core logic to implement, test coverage gaps, known risks, and the SPEC.md validation experiments still
+outstanding). See [`.ai/workflows/feature-development.md`](./.ai/workflows/feature-development.md) for how to
+pick up an individual piece, and `ASSUMPTIONS.md` in the proposal for known open risks (esp. B-1: the
+deepagents skill extension point is unverified).
 
 ---
 
@@ -253,4 +261,5 @@ MIT — see [`LICENSE`](./LICENSE).
 - `ARCHITECTURE.md`
 - `DECISIONS.md`
 - `CONTRIBUTING.md`
+- `TODO.md`
 - `docs/llm-yuki-v0.1-proposal/`
