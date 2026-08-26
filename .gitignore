@@ -30,3 +30,6 @@ coverage.xml
 
 # Pipeline runtime state (not repo content)
 pipeline-state/
+
+# Generated output from running the CLI against data/ (see data/README.md)
+/data/bundle/

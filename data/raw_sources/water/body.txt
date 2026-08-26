@@ -1,0 +1,13 @@
+Water is a chemical compound with the formula H2O: two hydrogen atoms covalently bonded to a single
+oxygen atom. At standard atmospheric pressure, water boils at 100 degrees Celsius (212 degrees Fahrenheit)
+and freezes at 0 degrees Celsius (32 degrees Fahrenheit). It is the only common substance found naturally
+on Earth's surface in all three physical states of matter: solid (ice), liquid, and gas (water vapor).
+
+Water is essential to all known forms of life, even though it provides no calories or organic nutrients.
+About 71 percent of Earth's surface is covered by water, mostly in oceans and other large water bodies,
+with 1.6 percent of water below ground in aquifers and 0.001 percent in the air as vapor, clouds, and
+precipitation.
+
+See the diagram below for the phase transitions between ice, liquid water, and water vapor.
+
+![water phase diagram](images/phase-diagram.png)
