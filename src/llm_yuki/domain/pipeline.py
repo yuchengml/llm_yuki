@@ -52,8 +52,12 @@ class Validator(abc.ABC):
     """Algorithm 1 lines 4-6: ``StructuralValidate`` + ``ContentValidate`` (proposal §2.2.3, §4.1)."""
 
     @abc.abstractmethod
-    def structural_validate(self, update: CompiledUpdate, writer: Writer) -> list[ValidationIssue]:
-        """``E_s ← StructuralValidate(U, W)``: deterministic checks (dangling links, OKF conformance, ...)."""
+    def structural_validate(self, update: CompiledUpdate, selected: list[str], writer: Writer) -> list[ValidationIssue]:
+        """``E_s ← StructuralValidate(U, W)``: deterministic checks (dangling links, OKF conformance, ...).
+
+        ``selected`` is this passage's ``SelectPages`` output (Algorithm 1 line 2) — needed to detect
+        Unseen Overwrite (proposal §4.1 #4): a candidate touching a page outside that selection.
+        """
         raise NotImplementedError
 
     @abc.abstractmethod
@@ -111,7 +115,7 @@ class Orchestrator:
 
         if self._error_book.periodic_fix_due(batch_id):
             self._fixer.llm_periodic_fix(self._error_book, self._writer)
-            self._error_book.verify_and_close()
+            self._error_book.verify_and_close(self._writer, batch_id)
 
     def _compile_passage(self, document: Document, constraints: list[str], batch_id: int) -> None:
         """Algorithm 1 lines 1-12 for a single source passage."""
@@ -119,7 +123,7 @@ class Orchestrator:
         update = self._extractor.compile_wiki_pages(document.text, selected, constraints)
         update = self._merger.merge(update, self._writer)
 
-        structural_issues = self._validator.structural_validate(update, self._writer)
+        structural_issues = self._validator.structural_validate(update, selected, self._writer)
         content_issues = self._validator.content_validate(update, self._writer)
         issues = structural_issues + content_issues
 
