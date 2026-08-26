@@ -1,0 +1,105 @@
+[project]
+name = "llm-yuki"
+version = "0.1.0"
+description = "LLM Wiki knowledge compilation & inference — a domain-agnostic pipeline that compiles source documents into a persistent, cross-linked OKF-conformant knowledge base."
+authors = [{ name = "Yucheng" }]
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.9",
+    "pyyaml>=6.0",
+]
+
+[tool.poetry]
+packages = [{ include = "llm_yuki", from = "src" }]
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3"
+pytest-cov = "^5.0"
+ruff = "^0.9"
+mypy = "^1.11"
+types-pyyaml = "^6.0"
+pre-commit = "^3.8"
+
+[build-system]
+requires = ["poetry-core>=2.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+# Maximum line length for code formatting
+line-length = 120
+# Number of spaces per indentation level
+indent-width = 4
+# Minimum Python version to target
+target-version = "py312"
+
+# Only enable isort rules by default
+lint.select = ["I"]
+# Extend with additional rule sets:
+# C: conventions, D: docstrings, E: pycodestyle errors,
+# F: pyflakes, W: pycodestyle warnings, ANN: type annotations, N: pep8-naming
+lint.extend-select = ["C", "D", "E", "F", "W", "ANN", "N"]
+# Ignored rules:
+# D100: missing docstring in public module
+# D107: missing docstring in __init__
+# D203: one-blank-line-before-class (conflicts with D211)
+# D205: one-blank-line-required-between-summary-and-description
+# D212: multi-line-summary-first-line (conflicts with D213)
+lint.ignore = ["D100", "D107", "D203", "D205", "D212"]
+# Ignore ANN (type annotation) and D (docstring) rules in test files
+lint.per-file-ignores = { "tests/**" = ["ANN", "D"] }
+# Use Google-style docstring convention
+lint.pydocstyle.convention = "google"
+
+# Use double quotes for strings
+format.quote-style = "double"
+# Use spaces for indentation (not tabs)
+format.indent-style = "space"
+# Do not skip trailing commas in magic expressions
+format.skip-magic-trailing-comma = false
+# Automatically detect line ending style
+format.line-ending = "auto"
+# Do not reformat code blocks inside docstrings
+format.docstring-code-format = false
+# Use dynamic line length for docstring code blocks
+format.docstring-code-line-length = "dynamic"
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "src"
+strict = true
+ignore_missing_imports = true
+
+[tool.coverage]
+run.branch = true
+run.source = ["src"]
+run.omit = ["tests/**"]
+report.show_missing = true
+# Raise this threshold as the project matures (target: 80%+)
+report.fail_under = 60
+report.exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+    "@(abc\\.)?abstractmethod",
+]
+html.directory = "htmlcov"
+xml.output = "coverage.xml"
+
+[tool.pytest.ini_options]
+# Test discovery root
+testpaths = ["tests"]
+# Enforce strict markers — all markers must be declared below
+addopts = "--strict-markers -ra"
+# Declared test markers
+markers = [
+    "unit: isolated unit tests with no I/O",
+    "integration: tests with real filesystem",
+    "e2e: full pipeline flow tests",
+    "slow: tests that take more than 1 second",
+]
+# Minimum pytest version required
+minversion = "7.0"
