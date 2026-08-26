@@ -45,6 +45,10 @@ flowchart LR
 - **Forbidden**: importing anything from `llm_yuki.adapters`, filesystem or network access, and any
   domain-specific (per-corpus) rule — those belong to a future skill layer, not the core pipeline
   (proposal `README.md` D3; unverified extension mechanism, see `ASSUMPTIONS.md` B-1)
+- **LLM call interface**: the LLM-backed steps (`Extractor.compile_wiki_pages`, `Validator.content_validate`,
+  `Fixer.llm_periodic_fix`) are expected to call an OpenAI-compatible Chat Completions API — either via
+  OpenRouter, or a self-hosted OpenAI-compatible server (e.g. vLLM, Ollama) — via the `openai` Python package
+  with a configurable `base_url`/`api_key`, not a vendor-specific native SDK. See `TODO.md` §B.
 
 ### 2.2 `llm_yuki.ports` — abstract interfaces
 
