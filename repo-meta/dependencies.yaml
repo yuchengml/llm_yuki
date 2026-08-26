@@ -1,0 +1,12 @@
+dependencies:
+  - name: pydantic
+    status: well-known      # familiar to LLMs; use directly
+
+  - name: pyyaml
+    status: well-known
+
+  # - name: deepagents
+  #   status: vendored
+  #   source: sdk/deepagents
+  #   note: unverified skill-extension mechanism, see docs/llm-yuki-v0.1-proposal/ASSUMPTIONS.md B-1.
+  #         Not a dependency yet — this POC's Connector/Extractor/Writer are all built-in code.

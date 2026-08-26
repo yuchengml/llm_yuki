@@ -1,0 +1,9 @@
+teams:
+  - name: maintainers
+    responsibility: overall project ownership (pipeline code, tests, docs, tooling)
+    paths:
+      - src/
+      - tests/
+      - docs/
+      - .ai/
+      - repo-meta/
