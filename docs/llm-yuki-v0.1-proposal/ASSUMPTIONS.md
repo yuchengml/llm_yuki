@@ -26,6 +26,8 @@
 
 10. **`error_book.yaml` 用 YAML 格式是設計選擇,不驗證跟 JSON 等其他格式的效能/可維護性差異**(D14)。格式本身是實作細節,不是這次要驗證的核心假設。
 
+11. **LLM 呼叫層假設走 OpenAI-compatible Chat Completions API,經 OpenRouter 或自建的 OpenAI-compatible server**(D20)。`Extractor`/`Validator`/`Fixer` 的 LLM-backed 步驟一律用標準 OpenAI-compatible 介面(`openai` 套件 + 可設定 `base_url`/`api_key`),不綁定特定廠商 SDK。具體選哪個模型/供應商留給 scaffolding 階段依成本/品質權衡決定;多供應商 fallback/路由邏輯不驗證,只假設單一設定好的 endpoint 可用。
+
 ---
 
 ## B. 未查證的假設(需要在 scaffolding 時特別留意,可能推翻既有決議)

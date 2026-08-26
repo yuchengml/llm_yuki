@@ -533,7 +533,23 @@ flowchart LR
 
 ---
 
-## 執行方式總覽(把 D1–D19 串成一條 pipeline)
+### D20. LLM 呼叫層:走 OpenAI-compatible Chat Completions API 介面,經 OpenRouter 或自建的 OpenAI-compatible server(2026-08-26)
+
+**背景**:`Extractor.compile_wiki_pages`、`Validator.content_validate`、`Fixer.llm_periodic_fix` 這幾個 LLM-backed 步驟目前都只是型別/介面 stub(`domain/pipeline.py`),還沒決議要接哪個 LLM 供應商、用哪種呼叫介面。使用者明確要求記錄這個假設:LLM 呼叫預期透過 OpenRouter,或是自行部署的 OpenAI-compatible API(例如自架 vLLM/Ollama 等相容 server),而不是綁定特定廠商(如某家原生 SDK)的呼叫介面。
+
+**決議**:
+
+1. LLM-backed 步驟一律透過 OpenAI-compatible 的 Chat Completions API 介面呼叫(標準 `POST /v1/chat/completions` 形狀),`base_url`/`api_key` 可設定,對應兩種部署情境:(a) 走 OpenRouter 這個聚合代理(可切換底層模型,不綁定單一廠商);(b) 自建的 OpenAI-compatible server(例如自架 vLLM/Ollama 等相容端點)。
+2. 因為介面是標準 OpenAI-compatible 形狀,不預期需要 vendor 特定廠商 SDK——直接用 `openai` Python 套件(官方 client,原生支援自訂 `base_url`)即可涵蓋兩種情境,不需要走 `sdk/REGISTRY.md` 的 vendoring 流程(AGENTS.md §6 的 vendoring 規則是給「訓練資料沒覆蓋、需要人工分析源碼」的 SDK 用的,`openai` 套件本身不屬於這類)。
+3. 這個決議只定「呼叫介面長什麼樣子」,不涉及選哪個具體模型/供應商——模型選擇留給 scaffolding 階段依成本(呼應 D19 cost ledger)/品質權衡決定,可能隨時切換,不鎖定在 `SPEC.md` 裡。
+
+**明確排除**:這次 POC 不驗證多供應商 fallback/路由邏輯(例如 OpenRouter 掛掉自動切自建 server),只假設單一設定好的 endpoint 可用;也不驗證特定自建 server 軟體(vLLM/Ollama/其他)彼此間的相容性差異,一律假設它們對外符合 OpenAI Chat Completions schema。
+
+**影響**:補上 D16 模組架構裡「LLM-backed 步驟到底怎麼呼叫 LLM」這個尚未決議的實作細節缺口,讓 `Extractor`/`Validator`/`Fixer` 的具體實作(`TODO.md` 區塊 B)有明確的呼叫介面可以照著寫,不用等到寫 code 時才臨時決定。已同步更新 `ASSUMPTIONS.md`(新增 A11)與根目錄 `TODO.md`(區塊 B 補充實作備註)。
+
+---
+
+## 執行方式總覽(把 D1–D20 串成一條 pipeline)
 
 這不是新決議,只是把散落在 D1–D10 的執行手法,依 pipeline 的四個階段重新排一遍,方便下一步直接對照著寫 `SPEC.md`。**模組/抽象邊界的架構圖見 D16**:下面四階段對應到 D16 的 `Connector`(階段1)→`Extractor`/`Merger`(階段2)→`Validator`/`ErrorBook`/`Fixer`(階段3)→`Writer`(貫穿階段2/3 的持久化)。
 

@@ -23,6 +23,13 @@ All of these currently raise `NotImplementedError` or are undefined; see
 [`src/llm_yuki/domain/pipeline.py`](./src/llm_yuki/domain/pipeline.py) and
 [`src/llm_yuki/domain/error_book.py`](./src/llm_yuki/domain/error_book.py).
 
+> **Implementation note (D20)**: the LLM-backed steps (`Extractor.compile_wiki_pages`,
+> `Validator.content_validate`, `Fixer.llm_periodic_fix`) are expected to call an **OpenAI-compatible Chat
+> Completions API** — either via **OpenRouter**, or a **self-hosted OpenAI-compatible server** (e.g. vLLM,
+> Ollama) — not a vendor-specific native SDK. Use the `openai` Python package with a configurable
+> `base_url`/`api_key`; no vendoring under `sdk/` is needed for it. See proposal `README.md` D20 and
+> `ASSUMPTIONS.md` A11.
+
 - [ ] `Extractor.select_pages` / `Extractor.compile_wiki_pages` — LLM-backed implementation
       (Algorithm 1 lines 1–3; proposal `ARCHITECTURE.md` §2.2.1)
 - [ ] `Merger.merge` — dedupe candidates against existing pages, resolve `is_new`
