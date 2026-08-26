@@ -79,7 +79,9 @@ class _NoopValidator(Validator):
     def structural_validate(self, update: CompiledUpdate, selected: list[str], writer: Writer) -> list[ValidationIssue]:
         return []
 
-    def content_validate(self, update: CompiledUpdate, writer: Writer, batch_id: int) -> list[ValidationIssue]:
+    def content_validate(
+        self, update: CompiledUpdate, passage: str, writer: Writer, batch_id: int
+    ) -> list[ValidationIssue]:
         return []
 
 

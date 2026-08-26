@@ -9,13 +9,11 @@ from __future__ import annotations
 
 import time
 
-from pydantic import ValidationError
-
 from llm_yuki.adapters.cost_ledger import JsonlCostLedger
 from llm_yuki.adapters.llm.client import OpenAICompatibleClient
+from llm_yuki.adapters.llm.compiled_update_parsing import parse_compiled_update
 from llm_yuki.adapters.llm.errors import LLMOutputError
 from llm_yuki.adapters.llm.json_utils import parse_json_object
-from llm_yuki.domain.entities import Claim, Concept
 from llm_yuki.domain.pipeline import CompiledUpdate, Extractor
 from llm_yuki.ports.writer import Writer
 
@@ -102,7 +100,7 @@ class LLMExtractor(Extractor):
             user_prompt=user_prompt,
         )
         payload = parse_json_object(content, context="Extractor.CompileWikiPages")
-        return _parse_compiled_update(payload)
+        return parse_compiled_update(payload, context="Extractor.CompileWikiPages")
 
     def _call_llm(self, *, stage: str, batch_id: int, system_prompt: str, user_prompt: str) -> str:
         start = time.monotonic()
@@ -125,24 +123,3 @@ def _describe_page(writer: Writer, slug: str) -> str:
     if claim is not None:
         return claim.claim_text
     return "(no description available)"
-
-
-def _parse_compiled_update(payload: dict[str, object]) -> CompiledUpdate:
-    raw_claims = payload.get("claims", [])
-    raw_concepts = payload.get("concepts", [])
-    if not isinstance(raw_claims, list) or not isinstance(raw_concepts, list):
-        raise LLMOutputError("Extractor.CompileWikiPages: 'claims' and 'concepts' must both be lists")
-
-    try:
-        claims = [Claim.model_validate(item) for item in raw_claims]
-        concepts = [Concept.model_validate(_without_key_facts(item)) for item in raw_concepts]
-    except ValidationError as exc:
-        raise LLMOutputError(f"Extractor.CompileWikiPages: response did not match Claim/Concept schema: {exc}") from exc
-
-    return CompiledUpdate(claims=claims, concepts=concepts)
-
-
-def _without_key_facts(item: object) -> object:
-    if isinstance(item, dict):
-        return {k: v for k, v in item.items() if k != "key_facts"}
-    return item

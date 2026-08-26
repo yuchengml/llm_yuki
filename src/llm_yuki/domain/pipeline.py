@@ -70,10 +70,14 @@ class Validator(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def content_validate(self, update: CompiledUpdate, writer: Writer, batch_id: int) -> list[ValidationIssue]:
+    def content_validate(
+        self, update: CompiledUpdate, passage: str, writer: Writer, batch_id: int
+    ) -> list[ValidationIssue]:
         """``E_c ← ContentValidate(U, W, A)``: LLM-based checks (unsupported facts, cross-page contradictions).
 
-        ``batch_id``: see :meth:`Extractor.select_pages`.
+        ``passage`` is this call's source text (Algorithm 1's source archive ``A``, scoped to the one
+        passage this ``update`` was compiled from) — needed for source-grounded verification of Unsupported
+        Facts (proposal §4.1 #6). ``batch_id``: see :meth:`Extractor.select_pages`.
         """
         raise NotImplementedError
 
@@ -139,7 +143,7 @@ class Orchestrator:
         update = self._merger.merge(update, self._writer)
 
         structural_issues = self._validator.structural_validate(update, selected, self._writer)
-        content_issues = self._validator.content_validate(update, self._writer, batch_id)
+        content_issues = self._validator.content_validate(update, document.text, self._writer, batch_id)
         issues = structural_issues + content_issues
 
         if issues:
