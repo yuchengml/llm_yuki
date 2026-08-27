@@ -26,6 +26,14 @@
 
 10. **`error_book.yaml` 用 YAML 格式是設計選擇,不驗證跟 JSON 等其他格式的效能/可維護性差異**(D14)。格式本身是實作細節,不是這次要驗證的核心假設。
 
+11. **~~型別系統明確不設 `Document`/`Source`(per-document)型別~~(D20)。⚠️ 2026-08-27 由 D21 推翻**:完成 `nashsu/llm_wiki` framework analysis 後發現它有 `source` 型別(每份文件一頁,忠實遵循 Karpathy 精神的現成實作),決議新增 `Document` 核心型別,這條範疇侷限不再成立。詳見 D21。
+
+12. **軟碰撞去重(命名不同的同一實體偵測)只做架構設計,這次 POC 不實作**(D22)。參考 `llm_wiki` 的 `dedup.ts`——每批次都要多一次 LLM 分組偵測呼叫,是持續性成本,且 `M3SciQA`/`MMDocRAG` 兩個領域的實體命名分歧程度沒有先驗證過有多嚴重,必要性未知。比照 D16 對 skill 抽換的處理方式,架構上留位置(`Merger` 介面設計上可以之後無痛加上),這次 POC 只靠既有的 exact-slug 比對(D9/D12 baseline)。
+
+13. **`Merger` 三層保護的 70% 長度比例門檻,直接沿用 `page-merge.ts` 的 `BODY_SHRINK_THRESHOLD` 數字,不針對我們自己的 `Concept.summary` 長度分布重新校準**(D22)。格式/門檻本身是實作細節,不是這次要驗證的核心假設,跟 A-10(`error_book.yaml` 用 YAML 格式)是同一類「借用既有做法,不重新調校」的範疇侷限。
+
+14. **`index.md` 分層深度只到核心型別這一層,不做更深的巢狀分層**(D23)。OKF spec 允許 index.md 出現在任意目錄深度,但這次 POC 只分到 `claims/`/`concepts/`/`documents/` 三個子目錄各一份 index,沒有再往下細分的必要性可言,是刻意收斂範疇,不是遺漏。
+
 ---
 
 ## B. 未查證的假設(需要在 scaffolding 時特別留意,可能推翻既有決議)
@@ -38,6 +46,12 @@
 
 4. **body/frontmatter 一致性(D17 方向A)的渲染邏輯正確性**。假設「`Writer` 決定性渲染 body 連結」不會出錯,但渲染邏輯本身一樣需要 unit test,不是選了這個方向就自動保證正確。**風險等級:低**,理由同上一項。
 
+5. **`Document.summary` 遞迴 batch-reduce 的收斂輪數沒有上限保護**(D21)。理論上如果某份文件產生的 `Claim` 數量極端多,遞迴分批總結可能要跑很多輪才收斂,這次沒有設計安全上限(例如「超過 N 輪強制截斷」)。**風險等級:中**——如果實測 `M3SciQA`/`MMDocRAG` 語料時真的出現極端案例(單一文件產生的 `Claim` 數量異常多),可能拖慢整體 pipeline 或產生非預期的成本尖峰,需要在 scaffolding 早期用小規模資料驗證這個機制的實際輪數分布,必要時回頭補上限保護。
+
+6. **`Writer` 的 `index.md` 分層渲染邏輯正確性(D23)**。跟 B-3(backlink 增量維護)、B-4(body 連結渲染)同一類——決定性渲染邏輯本身沒有實作過,需要 unit test 驗證根層 index 的三個型別分組、`claims/`/`concepts/`/`documents/` 三份子目錄 index 各自的完整性、每筆條目描述來源(`Concept.summary`/`Document.summary`/`Claim.claim_text`)是否正確取值。**風險等級:低**——是一般軟體正確性問題,不屬於 D13 Error Book 要抓的「LLM 編譯品質」錯誤範圍,理由同 B-3/B-4。
+
+7. **OKF spec 本身沒有查證到的固定版本號,內容可能持續演進**。這次專案兩次直接查 OKF 官方 spec 原文(2026-08-19 查證 D1 附註提到的版本落差、2026-08-27 查 `index.md` 具體規定支撐 D23),兩次都發現內容比先前理解的豐富,但都沒有查到一個明確可釘住的版本號。**風險等級:低**——這次 POC 的 D6 conformance 驗證與 D23 的分層 index 設計,都是對照「查證當下」的 spec 內容做的,如果 spec 之後又改版,這兩條決議可能需要回頭跟著調整,但不影響這次 POC 的可行性,列為留意項而非高風險項。
+
 ---
 
 ## C. 待辦(如果之後要驗證上述假設)
@@ -45,6 +59,9 @@
 - [ ] 補 `knowledge-base/frameworks/deepagents-0.7.6/analysis.md`(對應 B-1,目前優先順序最高但已決定延後,寫 `SPEC.md` 時仍要明確標成未驗證假設)
 - [ ] Phase 2 scaffolding 早期,用小規模資料驗證 B-2(`contradicted_by` 補漏率)
 - [ ] Phase 2 scaffolding 時為 B-3(`Writer` backlink 維護)、B-4(body 渲染邏輯)各自寫 unit test
+- [ ] Phase 2 scaffolding 早期,用小規模資料驗證 B-5(`Document.summary` 遞迴 batch-reduce 的實際輪數分布),必要時補上限保護
+- [ ] Phase 2 scaffolding 時為 B-6(`Writer` 的 `index.md` 分層渲染邏輯)寫 unit test,同 B-3/B-4
+- [ ] 實作前重新查一次 OKF 官方 spec 現況(B-7),確認 D6 conformance 規則與 D23 的 index.md 分層規定沒有跟最新版本脫節
 
 ---
 

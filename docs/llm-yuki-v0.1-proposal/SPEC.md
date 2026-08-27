@@ -16,7 +16,9 @@ Date: 2026-08-26
 - 執行策略採「Phase 1 平行抽取 + Phase 2 序列合併寫入」,不驗證與完全序列做法的吞吐量對照
 - 不測試兩領域合併成單一跨領域 bundle 的情境
 - 不逐頁人工審閱生成頁面內容品質、不做 wikilink 語意人工評估、不做大規模使用者研究
-- `Writer` 只驗證檔案系統 markdown 一種實作
+- `Writer` 只驗證檔案系統 markdown 一種實作;`index.md` 採 OKF 分層索引,依 `Claim`/`Concept`/`Document` 分子目錄各自建立、每筆條目附一句話描述,由 `Writer` 決定性生成(D23)
+- 型別系統為 `Claim`/`Concept`/`Document` 三個核心型別(D21);`Document` 的 `summary` 用遞迴 batch-reduce 生成,不設收斂輪數上限保護
+- `Merger` 的合併機制含三層保護(陣列聯集/LLM合併+70%長度比例拒絕/鎖定欄位,D22),但軟碰撞去重(命名不同的同一實體偵測)只做架構設計,這次不實作
 - deepagents 的 skill 抽換機制(見 `ASSUMPTIONS.md` B-1)列為未查證假設,`analysis.md` 延後,這次 POC 的 `Connector`/`Extractor`/`Writer` 具體實作一律用內建程式碼,不驗證 skill 抽換本身是否可行
 - 成本統計(`cost_ledger.jsonl`,見 `ARCHITECTURE.md` 第 7 節)只做被動記錄與事後分析,不做主動的成本上限/預算警報 governance
 
