@@ -92,6 +92,26 @@ test exercises the real `MarkdownWriter`, not a fake.
 - [ ] **D3/D16** — if scaffolding finds the `deepagents` skill-swap mechanism doesn't support the intended
       extension points, the `Connector`/`Extractor`/`Writer` architecture needs to be revisited, not patched.
 
+## D2. Known gap vs. the referenced Karpathy/LLM-Wiki methodology (unresolved, kept as-is for now)
+
+- [ ] **No guaranteed "one wiki page per source document."** Karpathy's original gist (quoted in proposal
+      `README.md` D11) describes the ingest loop as: LLM reads the source, **writes a summary page**, updates
+      the index, updates related entity/concept pages — three distinct outputs. D9's core schema only
+      formalizes two types, `Claim` and `Concept`; nothing guarantees a document gets its own representative
+      page. In the actual implementation (`adapters/llm/extractor.py::LLMExtractor.compile_wiki_pages`), the
+      LLM freely decides what `Claim`/`Concept` candidates to extract from a passage — if everything it
+      extracts folds into existing `Concept`s, the source document itself may end up with no page representing
+      it at all.
+  - This gap was **not** caught during the D9 discussion and is **not** recorded in `ASSUMPTIONS.md` §A the
+    way every other deliberate scope cut is (D9's mention of a domain skill possibly producing `doc:Document`
+    is an example of an optional extension type, not a core-pipeline guarantee, and no such skill exists in
+    this POC since `Extractor` is domain-agnostic).
+  - **Decision (this session): leave the current behavior as-is, do not implement a fix now** — tracked here
+    only. If revisited, the options discussed were: (a) make `compile_wiki_pages` guarantee a document-level
+    `Concept` (or a new core type) when nothing else represents the document; (b) formally document this as an
+    accepted deviation in `ASSUMPTIONS.md` §A, matching this project's own "範疇之外的假設必須顯式記錄"
+    principle; (c) both.
+
 ## E. Validation experiments (SPEC.md Success Criteria)
 
 - [ ] Compilation/maintenance correctness: `index.md` completeness (no orphan/missing pages); `log.md` audit
