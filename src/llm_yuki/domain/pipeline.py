@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import abc
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 from llm_yuki.domain.entities import Claim, Concept
+from llm_yuki.domain.entities import Document as WikiDocument
 from llm_yuki.domain.error_book import ErrorBook, ValidationIssue
 from llm_yuki.ports.connector import Connector, Document
 from llm_yuki.ports.writer import Writer
@@ -52,8 +54,22 @@ class Merger(abc.ABC):
     """Dedupe/decide final content; does not persist — persistence is the Writer's job (proposal §2.2.2)."""
 
     @abc.abstractmethod
-    def merge(self, update: CompiledUpdate, writer: Writer) -> CompiledUpdate:
-        """Resolve ``is_new`` / merge against existing pages before ``ApplyUpdates``."""
+    def merge(self, update: CompiledUpdate, writer: Writer, batch_id: int) -> CompiledUpdate:
+        """Resolve ``is_new`` / merge against existing pages before ``ApplyUpdates``.
+
+        ``batch_id``: see :meth:`Extractor.select_pages` — identifies any LLM-backed merge call (D22 layer 2)
+        for cost-ledger recording.
+        """
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def summarize_document(self, document_slug: str, claim_texts: list[str], writer: Writer, batch_id: int) -> str:
+        """Generate ``Document.summary`` via recursive batch-reduce over one document's Claim texts (D21 §1.5).
+
+        The ``Orchestrator`` calls this once per newly-ingested source, after that passage's final Claims are
+        known, using their ``claim_text``s. Returns ``""`` when ``claim_texts`` is empty (nothing was
+        extracted for this source). ``batch_id``: see :meth:`Extractor.select_pages`.
+        """
         raise NotImplementedError
 
 
@@ -140,7 +156,7 @@ class Orchestrator:
         """Algorithm 1 lines 1-12 for a single source passage."""
         selected = self._extractor.select_pages(document.text, self._writer, batch_id)
         update = self._extractor.compile_wiki_pages(document.text, selected, constraints, batch_id)
-        update = self._merger.merge(update, self._writer)
+        update = self._merger.merge(update, self._writer, batch_id)
 
         structural_issues = self._validator.structural_validate(update, selected, self._writer)
         content_issues = self._validator.content_validate(update, document.text, self._writer, batch_id)
@@ -151,7 +167,32 @@ class Orchestrator:
             if structural_issues:
                 update = self._fixer.code_auto_fix(update, structural_issues)
 
+        update = CompiledUpdate(claims=_anchor_source_refs(update.claims, document.ref.id), concepts=update.concepts)
+        self._ensure_document_page(document.ref.id, update.claims, batch_id)
         self._apply_updates(update)
+
+    def _ensure_document_page(self, document_slug: str, claims: list[Claim], batch_id: int) -> None:
+        """D21: create this source's ``Document`` navigation page, if it doesn't exist yet.
+
+        Written *before* ``_apply_updates`` so ``Writer.write_claim``'s backlink maintenance (D21, same
+        mechanism as D18's ``Concept.key_facts``) can attach ``produced_claims``/``produced_concepts`` to it
+        immediately. This POC assumes each Raw Source is only ever ingested once (D21's explicit exclusion —
+        no re-ingest/incremental-update scenario), so an existing Document page is left untouched.
+        """
+        if self._writer.read_document(document_slug) is not None:
+            return
+
+        claim_texts = [claim.claim_text for claim in claims]
+        summary = self._merger.summarize_document(document_slug, claim_texts, self._writer, batch_id)
+        self._writer.write_document(
+            WikiDocument(
+                slug=document_slug,
+                document_title=document_slug,
+                source_path=document_slug,
+                ingested_at=datetime.now(UTC).date().isoformat(),
+                summary=summary,
+            )
+        )
 
     def _apply_updates(self, update: CompiledUpdate) -> None:
         """Algorithm 1 line 12: ``W ← ApplyUpdates(W, U)``.
@@ -164,3 +205,18 @@ class Orchestrator:
             self._writer.write_concept(concept)
         for claim in update.claims:
             self._writer.write_claim(claim)
+
+
+def _anchor_source_refs(claims: list[Claim], document_slug: str) -> list[Claim]:
+    """Force every Claim's ``source_ref`` document-id segment to the real source id (D17/D18/D22 "deterministic
+    overrides LLM"): the Extractor's LLM call may invent/misformat this id, but the Orchestrator already knows
+    the ground truth, and ``Document`` backlink maintenance (``Writer``) depends on the two matching exactly.
+    Runs after structural validation/``CodeAutoFix``, so malformed-ref lint signals are computed on the LLM's
+    original value first — this only touches the leading id, never the ``#locator`` suffix.
+    """
+    anchored = []
+    for claim in claims:
+        _, _, locator = claim.source_ref.partition("#")
+        new_ref = f"{document_slug}#{locator}" if locator else document_slug
+        anchored.append(claim if new_ref == claim.source_ref else claim.model_copy(update={"source_ref": new_ref}))
+    return anchored

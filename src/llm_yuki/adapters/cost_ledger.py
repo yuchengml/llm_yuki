@@ -26,6 +26,9 @@ class CostEvent(BaseModel):
     tokens_in: int
     tokens_out: int
     wall_clock_ms: float
+    round: int | None = Field(
+        default=None, description="Batch-round number, for stages that recurse (e.g. Merger.summarize_document, D21)."
+    )
     timestamp: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
@@ -37,10 +40,23 @@ class JsonlCostLedger:
         self._root.mkdir(parents=True, exist_ok=True)
         self._path = self._root / "cost_ledger.jsonl"
 
-    def record(self, stage: str, batch_id: int, tokens_in: int, tokens_out: int, wall_clock_ms: float) -> CostEvent:
+    def record(
+        self,
+        stage: str,
+        batch_id: int,
+        tokens_in: int,
+        tokens_out: int,
+        wall_clock_ms: float,
+        round: int | None = None,
+    ) -> CostEvent:
         """Append one cost event and return it."""
         event = CostEvent(
-            stage=stage, batch_id=batch_id, tokens_in=tokens_in, tokens_out=tokens_out, wall_clock_ms=wall_clock_ms
+            stage=stage,
+            batch_id=batch_id,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            wall_clock_ms=wall_clock_ms,
+            round=round,
         )
         with self._path.open("a", encoding="utf-8") as f:
             f.write(event.model_dump_json() + "\n")

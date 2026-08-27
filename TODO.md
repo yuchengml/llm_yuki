@@ -81,47 +81,79 @@ its `related_concepts` backlink, since `Writer.write_claim`'s backlink maintenan
 that isn't persisted yet rather than erroring. Fixed by writing concepts first — caught only because the e2e
 test exercises the real `MarkdownWriter`, not a fake.
 
-### B2. New work from the D20–D23 proposal update (2026-08-27) — not yet implemented
+### B2. New work from the D20–D23 proposal update (2026-08-27) — **implemented and verified**
 
 This resolves the gap tracked below in §D2 ("no guaranteed one-page-per-document") — D21 formally reversed
-D20 and added a third core type. None of this is built yet.
+D20 and added a third core type. All items below are built and covered by `pytest`/`mypy`/`ruff` (132 tests,
+`poetry run pytest -q` / `poetry run mypy src` / `poetry run ruff check .` all clean).
 
-- [ ] **`Document` core type** (D21, proposal `ARCHITECTURE.md` §1.5) — add to `domain/entities.py`:
+**Also actually run end-to-end** (2026-08-27), not just unit/integration/e2e-tested: `poetry run llm-yuki
+compile` against two small Raw Source documents, pointed at a local OpenAI-compatible mock HTTP server
+(live network to OpenRouter is blocked by this sandbox's egress policy — see `/root/.ccr/README.md`; the
+mock server is the closest available substitute for "OPENAI_BASE_URL points at a real OpenAI-compatible
+endpoint", which is exactly what the CLI itself can't tell apart from a real one). Confirmed on disk: a
+`bundle/` with `claims/`/`concepts/`/`documents/` subdirectories, each with its own populated `index.md`;
+the root `index.md` linking to all three; `Document` pages with correctly populated `produced_claims`/
+`produced_concepts` backlinks; `Claim.source_ref` correctly anchored to the real source id (not whatever the
+mock LLM returned); `cost_ledger.jsonl` recording every stage including `Merger.summarize_document`'s `round`
+field; and an empty `error_book.yaml` (no structural/content issues on this clean input).
+
+- [x] **`Document` core type** (D21, proposal `ARCHITECTURE.md` §1.5) — added to `domain/entities.py`:
       `document_title`/`source_path`/`ingested_at`/`summary`/`produced_claims`/`produced_concepts`/
-      `related_pages`. One per D10 Raw Source document.
-- [ ] **`Writer.write_document`/`read_document`** — `MarkdownWriter` needs a `documents/` directory,
+      `related_pages`. One per D10 Raw Source document (`slug` = the source's `SourceRef.id`).
+- [x] **`Writer.write_document`/`read_document`** — `MarkdownWriter` has a `documents/` directory,
       analogous to `claims/`/`concepts/`.
-- [ ] **`Writer` backlink maintenance for `Document`** — `produced_claims`/`produced_concepts` maintained
-      incrementally on write, same mechanism as D18's `Concept.key_facts` (see `_maintain_claim_backlinks`
-      in `adapters/writers/markdown_writer.py` for the existing pattern to extend).
-- [ ] **`Document.summary` recursive batch-reduce generation** (D21 §1.5, `Merger`'s responsibility, *not*
-      folded into any single passage's `Extractor` call) — LLM-backed:
-      1. Triggers once all of a document's passages have completed Phase 1 extraction (all its `Claim`s exist).
-         `Orchestrator`/`Merger` don't currently track "which document is this passage's Claims from" or
-         "are all of a document's passages done" — this bookkeeping doesn't exist yet and needs designing.
-      2. Collects the document's `Claim.claim_text`s, checks against a context-window budget (borrowing the
-         `context-budget.ts` fixed-ratio-quota approach, per D21) — fits: one LLM call summarizes directly;
-         doesn't fit: batch the claims, summarize each batch, recurse on the batch summaries until it fits.
-      3. Records cost under `stage="Merger.summarize_document"` (optionally with a `round` field per D21 point 3).
+- [x] **`Writer` backlink maintenance for `Document`** — `produced_claims`/`produced_concepts` maintained
+      incrementally on write (`_maintain_document_backlinks` in `adapters/writers/markdown_writer.py`), same
+      mechanism as D18's `Concept.key_facts`. Depends on `Claim.source_ref`'s leading `<document-slug>`
+      segment matching the real `Document.slug` — see the `Orchestrator._anchor_source_refs` note below.
+- [x] **`Document.summary` recursive batch-reduce generation** (D21 §1.5) → `Merger.summarize_document` in
+      `adapters/merging/default_merger.py::DefaultMerger`:
+      1. **Trigger simplified from the original design**: `TxtFileConnector` currently produces exactly one
+         passage per document, so "all of a document's passages are done" is trivially true right after that
+         one `compile_wiki_pages` call — no cross-passage bookkeeping was needed. `Orchestrator._compile_passage`
+         calls `_ensure_document_page` (which calls `summarize_document`) once per source, right before
+         `_apply_updates`, using that passage's final (post-`CodeAutoFix`) `Claim.claim_text`s. Revisit if a
+         future `Connector` ever splits one document into multiple passages.
+      2. Collects the document's `Claim.claim_text`s, checks against a fixed character-count budget
+         (`_DOCUMENT_BUDGET_CHARS`, spirit borrowed from `context-budget.ts`, not token-accurate) — fits: one
+         LLM call summarizes directly; doesn't fit: batch the claims, summarize each batch, recurse on the
+         batch summaries until they fit.
+      3. Records cost under `stage="Merger.summarize_document"`, with a `round` field (added to `CostEvent`/
+         `JsonlCostLedger.record`, optional/`None` for every other stage) marking the batch-reduce round.
       4. **No convergence-round safety cap** — deliberately unbounded per D21's explicit exclusion; tracked as
          a risk below (ASSUMPTIONS.md B-5).
-- [ ] **`Merger` three-layer merge protection** (D22, replaces `DefaultMerger`'s current simple union-everything
-      approach for `Concept` updates where `is_new = false`):
-      1. Layer 1 (deterministic, already have this): array fields (`aliases`/`tags`/`key_facts`/
-         `related_pages`/`related_sources`) — set union, no LLM call.
-      2. Layer 2 (LLM merge + rejection, **missing**): only call the LLM to merge `summary` when old and new
-         have a real conflict (not just concatenation); if the merged result is `< 70%` of
-         `max(len(old), len(new))`, reject it as suspected content loss and fall back to layer 1's result with
-         the old `summary` kept. The 70% threshold is borrowed verbatim from `llm_wiki`'s
+      5. **Also added, not originally called out**: `Orchestrator._anchor_source_refs` deterministically
+         overwrites every compiled Claim's `source_ref` leading id segment with the real source id
+         (`document.ref.id`), after `CodeAutoFix` runs (so `malformed_refs` lint still sees the LLM's original
+         value) but before `Document`/backlink writes. The Extractor's LLM call has no guaranteed way to know
+         the real source id, and `Document` backlink maintenance requires an exact match — this is a new
+         instance of the "deterministic overrides LLM" principle (D17/D18/D22), not a design gap.
+- [x] **`Merger` three-layer merge protection** (D22) → same `DefaultMerger`, for `Concept` updates where
+      `is_new = false`:
+      1. Layer 1 (deterministic): array fields (`aliases`/`tags`/`key_facts`/`related_pages`/`related_sources`)
+         — set union, no LLM call; `summary` falls back to `new or old`.
+      2. Layer 2 (LLM merge + rejection): only calls the LLM to merge `summary` when old and new have a real
+         conflict (`_has_real_conflict` — both non-empty, unequal, and neither a substring of the other; a
+         substring relationship is treated as simple concatenation, handled by layer 1 alone). If the merged
+         result is `< 70%` of `max(len(old), len(new))`, rejects it as suspected content loss and keeps the
+         *old* `summary` instead. The 70% threshold is borrowed verbatim from `llm_wiki`'s
          `BODY_SHRINK_THRESHOLD` (ASSUMPTIONS.md A-13 — not recalibrated for our data).
-      3. Layer 3 (locked fields, **missing**): `concept_title`/`type`/`created` always keep the existing
-         value regardless of what layer 2 produced — same "deterministic overrides LLM" principle as D17/D18.
+         **`llm_client=None` disables this layer entirely** (falls back to layer 1's `new or old`, same as
+         pre-D22 behavior) rather than raising — `merge()` runs unconditionally every passage, unlike the
+         periodic-only `llm_periodic_fix`, so it can't require an LLM client to function at all.
+      3. Layer 3 (locked fields): `concept_title` always keeps the existing value on merge, regardless of what
+         layers 1-2 produce (`type`/`created` aren't domain-model fields in this codebase — OKF frontmatter
+         handles `type`, and there's no `created` field on `Concept` — so `concept_title` is the only field
+         this layer applies to here).
 - [ ] **Soft-collision dedup — architecture placeholder only, do not implement** (D22 point 2, ASSUMPTIONS.md
       A-12): leave room in `Merger`'s interface for a future LLM-based "these differently-named candidates are
       probably the same entity" detection pass (modeled on `llm_wiki`'s `dedup.ts`), but this POC deliberately
       ships without it — same treatment as the deepagents skill-swap point (D16). Don't build this; just don't
-      design `Merger` in a way that would block adding it later.
-- [ ] **Hierarchical `index.md`** (D23, replaces `MarkdownWriter._regenerate_index`'s single flat list):
+      design `Merger` in a way that would block adding it later. *(Confirmed still true: `DefaultMerger`'s
+      slug-exact dedup and the new `summarize_document`/three-layer-merge methods don't assume anything about
+      slugs being the only way two pages could refer to the same entity — no changes needed to keep this open.)*
+- [x] **Hierarchical `index.md`** (D23, replaces `MarkdownWriter._regenerate_index`'s single flat list):
       - Root `bundle/index.md`: three type-block entry point (`# Claims` / `# Concepts` / `# Documents`),
         each linking to that subdirectory's own `index.md` — no longer lists individual pages itself.
       - `claims/index.md`, `concepts/index.md`, `documents/index.md`: each fully lists that type's pages.
@@ -130,13 +162,22 @@ D20 and added a third core type. None of this is built yet.
       - No deeper nesting than the type level (ASSUMPTIONS.md A-14 — deliberate, OKF allows it, not needed here).
       - Still `Writer`-rendered deterministically from disk + frontmatter, never LLM-generated (same principle
         as D17/D18/D22).
-- [ ] **`Validator.structural_validate`: Index Inconsistency check needs rework for D23** — bidirectional diff
-      now needs to run per-subdirectory (`claims/`, `concepts/`, `documents/`) plus a root-level check that
-      the three type-block links exist and point correctly, instead of the current single flat-list diff.
-- [ ] **Missing `Document` page reclassified as Incomplete Pages, not a new error type** (D21 point 5): a Raw
-      Source with no corresponding `Document` page is an existing structural error (§4.1 #2, Incomplete
-      Pages), not an 8th error category — update `DefaultValidator`'s incomplete-pages check accordingly once
-      `Document` exists.
+- [x] **`Validator.structural_validate`: Index Inconsistency check extended for `Document`** — `Document` joins
+      Claim/Concept as a third type whose slug can collide with a compiled candidate's (`_check_index_inconsistency`
+      now also checks each candidate Claim/Concept's slug against `writer.read_document`). **Scope note**: the
+      proposal's literal definition of this error type (`ARCHITECTURE.md` §4.1 #5) is a full bidirectional diff
+      between `index.md` and the filesystem; this codebase's `DefaultValidator` never implemented that — it was
+      already scoped down to same-slug-different-type collision detection before D23 (see the type-level
+      docstring/`error_book.py`'s `_ROOT_CAUSE_TEMPLATES`), and this pass only extends that existing, narrower
+      scope to the new third type. A true `index.md`-vs-filesystem diff (per-subdirectory or otherwise) remains
+      unimplemented — pre-existing gap, not introduced or worsened by D23.
+- [x] **Missing `Document` page reclassified as Incomplete Pages, not a new error type (D21 point 5) — satisfied
+      by construction, no Validator check added.** `Orchestrator._ensure_document_page` now runs unconditionally
+      for every source `run_batch` processes (before `_apply_updates`), so a processed Raw Source without a
+      `Document` page can't occur through this pipeline's normal flow — there's no reachable state for a
+      Validator-side check to catch, and `structural_validate`'s signature (`update`/`selected`/`writer`, no
+      source-ref) has no natural way to know "which source is this batch currently on" without a broader
+      interface change for a condition that's already structurally impossible.
 
 ## C. Test coverage gaps (ASSUMPTIONS.md §C)
 
@@ -145,13 +186,17 @@ D20 and added a third core type. None of this is built yet.
 - [x] Unit tests for **B-4**: body/frontmatter rendering logic (proposal decision D17, direction A) — added
       to `tests/integration/test_markdown_writer.py` (asserts rendered body sections match frontmatter, and
       that empty sections are omitted)
-- [ ] Unit tests for **B-5**: `Document.summary` recursive batch-reduce — various `Claim` counts/sizes,
-      including the multi-round recursion path, once §B2's implementation lands
-- [ ] Unit tests for **B-6**: hierarchical `index.md` rendering — root 3-type-block linking, each subdirectory
-      index's completeness, and that each entry's one-line description pulls from the right field
-      (`Concept.summary`/`Document.summary`/`Claim.claim_text`)
-- [ ] Tests for D22's `Merger` three-layer protection — array union unaffected, LLM-merge-then-70%-rejection
-      fallback path, and that locked fields never change regardless of LLM output
+- [x] Unit tests for **B-5**: `Document.summary` recursive batch-reduce — `tests/unit/test_default_merger.py`
+      (empty claims, missing `llm_client`) + `tests/integration/test_default_merger_llm.py` (single-call
+      within-budget path, and the multi-round recursion path when over budget)
+- [x] Unit tests for **B-6**: hierarchical `index.md` rendering — `tests/integration/test_markdown_writer.py::
+      test_index_lists_all_pages` (root 3-type-block linking + each subdirectory index's completeness); each
+      entry's one-line description sourcing is exercised by `_claim_index_entries`/`_concept_index_entries`/
+      `_document_index_entries` reading the real `claim_text`/`concept_title`+`summary`/`document_title`+
+      `summary` fields (no separate dedicated test for the description-sourcing logic in isolation)
+- [x] Tests for D22's `Merger` three-layer protection — `tests/unit/test_default_merger.py` (array union
+      unaffected, locked `concept_title`, layer-2-skipped-without-`llm_client`) + `tests/integration/
+      test_default_merger_llm.py` (LLM-merge-then-70%-rejection fallback path)
 
 ## D. Known risks to watch during implementation
 

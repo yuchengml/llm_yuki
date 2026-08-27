@@ -84,7 +84,7 @@ def _run_compile(source_dir: Path, bundle_dir: Path, pipeline_state_dir: Path, b
         connector=connector,
         writer=writer,
         extractor=LLMExtractor(llm_client, cost_ledger),
-        merger=DefaultMerger(),
+        merger=DefaultMerger(llm_client, cost_ledger),
         validator=DefaultValidator(llm_client, cost_ledger),
         fixer=DefaultFixer(llm_client, cost_ledger),
         error_book=error_book,

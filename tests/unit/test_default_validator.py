@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from llm_yuki.adapters.validation.default_validator import DefaultValidator
-from llm_yuki.domain.entities import Claim, Concept, ContradictionRef
+from llm_yuki.domain.entities import Claim, Concept, ContradictionRef, Document
 from llm_yuki.domain.pipeline import CompiledUpdate
 from llm_yuki.ports.writer import Writer
 
@@ -16,6 +16,7 @@ class _FakeWriter(Writer):
     def __init__(self) -> None:
         self.claims: dict[str, Claim] = {}
         self.concepts: dict[str, Concept] = {}
+        self.documents: dict[str, Document] = {}
 
     def write_claim(self, claim: Claim) -> None:
         self.claims[claim.slug] = claim
@@ -23,14 +24,20 @@ class _FakeWriter(Writer):
     def write_concept(self, concept: Concept) -> None:
         self.concepts[concept.slug] = concept
 
+    def write_document(self, document: Document) -> None:
+        self.documents[document.slug] = document
+
     def read_claim(self, slug: str) -> Claim | None:
         return self.claims.get(slug)
 
     def read_concept(self, slug: str) -> Concept | None:
         return self.concepts.get(slug)
 
+    def read_document(self, slug: str) -> Document | None:
+        return self.documents.get(slug)
+
     def list_pages(self) -> list[str]:
-        return [*self.claims, *self.concepts]
+        return [*self.claims, *self.concepts, *self.documents]
 
 
 def _claim(**overrides: object) -> Claim:
@@ -154,6 +161,31 @@ def test_claim_slug_colliding_with_existing_concept_is_index_inconsistency() -> 
     issues = DefaultValidator().structural_validate(update, selected=[], writer=writer)
 
     assert any(i.error_type == "index_inconsistency" for i in issues)
+
+
+def test_claim_slug_colliding_with_existing_document_is_index_inconsistency() -> None:
+    """D21/D23: Document joins Claim/Concept as a third core type that can collide on slug."""
+    writer = _FakeWriter()
+    writer.write_document(
+        Document(slug="dupe", document_title="Dupe", source_path="dupe", ingested_at="2026-08-27", summary="x")
+    )
+    update = CompiledUpdate(claims=[_claim(slug="dupe")])
+
+    issues = DefaultValidator().structural_validate(update, selected=[], writer=writer)
+
+    assert any(i.error_type == "index_inconsistency" and i.affected_refs == ["dupe"] for i in issues)
+
+
+def test_concept_slug_colliding_with_existing_document_is_index_inconsistency() -> None:
+    writer = _FakeWriter()
+    writer.write_document(
+        Document(slug="dupe", document_title="Dupe", source_path="dupe", ingested_at="2026-08-27", summary="x")
+    )
+    update = CompiledUpdate(concepts=[Concept(slug="dupe", concept_title="Dupe", summary="x")])
+
+    issues = DefaultValidator().structural_validate(update, selected=[], writer=writer)
+
+    assert any(i.error_type == "index_inconsistency" and i.affected_refs == ["dupe"] for i in issues)
 
 
 def test_content_validate_without_llm_client_raises_runtime_error() -> None:

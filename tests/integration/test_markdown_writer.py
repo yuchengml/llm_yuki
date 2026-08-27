@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from llm_yuki.adapters.writers.markdown_writer import MarkdownWriter
-from llm_yuki.domain.entities import Claim, Concept, ContradictionRef
+from llm_yuki.domain.entities import Claim, Concept, ContradictionRef, Document
 
 pytestmark = pytest.mark.integration
 
@@ -67,7 +67,71 @@ def test_write_claim_maintains_symmetric_contradiction(tmp_path: Path) -> None:
     assert claim_a.contradicted_by == [ContradictionRef(slug="claim-b", reason="conflicting weekday")]
 
 
+def test_write_and_read_document_round_trips(tmp_path: Path) -> None:
+    writer = MarkdownWriter(tmp_path)
+    document = Document(
+        slug="doc-1",
+        document_title="Doc 1",
+        source_path="raw_sources/doc-1",
+        ingested_at="2026-08-27",
+        summary="A short document.",
+    )
+
+    writer.write_document(document)
+    read_back = writer.read_document("doc-1")
+
+    assert read_back == document
+
+
+def test_write_claim_maintains_document_backlinks(tmp_path: Path) -> None:
+    writer = MarkdownWriter(tmp_path)
+    writer.write_document(
+        Document(
+            slug="doc-1",
+            document_title="Doc 1",
+            source_path="raw_sources/doc-1",
+            ingested_at="2026-08-27",
+            summary="A short document.",
+        )
+    )
+    writer.write_concept(Concept(slug="water", concept_title="Water", summary="A chemical compound."))
+
+    writer.write_claim(
+        Claim(
+            slug="claim-1",
+            claim_text="Water boils at 100C at sea level.",
+            source_ref="doc-1#p3",
+            confidence=0.9,
+            provenance_state="extracted",
+            related_concepts=["water"],
+        )
+    )
+
+    document = writer.read_document("doc-1")
+    assert document is not None
+    assert document.produced_claims == ["claim-1"]
+    assert document.produced_concepts == ["water"]
+
+
+def test_write_claim_with_no_matching_document_is_not_dangling(tmp_path: Path) -> None:
+    """A Claim's source_ref may name a Document that hasn't been ingested yet — not this Writer's job to fix."""
+    writer = MarkdownWriter(tmp_path)
+
+    writer.write_claim(
+        Claim(
+            slug="claim-1",
+            claim_text="...",
+            source_ref="doc-missing#p1",
+            confidence=0.5,
+            provenance_state="extracted",
+        )
+    )
+
+    assert writer.read_document("doc-missing") is None
+
+
 def test_index_lists_all_pages(tmp_path: Path) -> None:
+    """D23: root index.md links to per-type subdirectory indices, which fully list that type's pages."""
     writer = MarkdownWriter(tmp_path)
     writer.write_concept(Concept(slug="water", concept_title="Water", summary="A chemical compound."))
     writer.write_claim(
@@ -79,11 +143,24 @@ def test_index_lists_all_pages(tmp_path: Path) -> None:
             provenance_state="extracted",
         )
     )
+    writer.write_document(
+        Document(
+            slug="doc-1",
+            document_title="Doc 1",
+            source_path="raw_sources/doc-1",
+            ingested_at="2026-08-27",
+            summary="A short document.",
+        )
+    )
 
-    index_text = (tmp_path / "index.md").read_text(encoding="utf-8")
+    root_index = (tmp_path / "index.md").read_text(encoding="utf-8")
+    assert "claims/index.md" in root_index
+    assert "concepts/index.md" in root_index
+    assert "documents/index.md" in root_index
 
-    assert "[[water]]" in index_text
-    assert "[[claim-1]]" in index_text
+    assert "[[water]]" in (tmp_path / "concepts" / "index.md").read_text(encoding="utf-8")
+    assert "[[claim-1]]" in (tmp_path / "claims" / "index.md").read_text(encoding="utf-8")
+    assert "[[doc-1]]" in (tmp_path / "documents" / "index.md").read_text(encoding="utf-8")
 
 
 def test_claim_body_renders_related_pages_and_sources_from_frontmatter(tmp_path: Path) -> None:

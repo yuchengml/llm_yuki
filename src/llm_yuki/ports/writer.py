@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import abc
 
-from llm_yuki.domain.entities import Claim, Concept
+from llm_yuki.domain.entities import Claim, Concept, Document
 
 
 class Writer(abc.ABC):
-    """Output port: persists ``Claim``/``Concept`` pages and supports reading existing ones back.
+    """Output port: persists ``Claim``/``Concept``/``Document`` pages and supports reading existing ones back.
 
     Implementations live under ``llm_yuki.adapters.writers``. Whatever the backing store, the persisted output
     must remain exportable/renderable as an OKF-conformant markdown bundle (proposal ARCHITECTURE.md §2.3,
@@ -25,14 +25,20 @@ class Writer(abc.ABC):
         """Persist a Claim page.
 
         Implementations must also perform the backlink maintenance described in proposal ARCHITECTURE.md
-        §2.3.2: add ``claim.slug`` to each related Concept's ``key_facts``, and symmetrically update the
-        Claims referenced in ``claim.contradicted_by``.
+        §2.3.2/D21: add ``claim.slug`` to each related Concept's ``key_facts`` and to the source Document's
+        ``produced_claims``, add each ``related_concepts`` slug to that Document's ``produced_concepts``, and
+        symmetrically update the Claims referenced in ``claim.contradicted_by``.
         """
         raise NotImplementedError
 
     @abc.abstractmethod
     def write_concept(self, concept: Concept) -> None:
         """Persist a Concept page."""
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def write_document(self, document: Document) -> None:
+        """Persist a Document page (D21)."""
         raise NotImplementedError
 
     @abc.abstractmethod
@@ -43,6 +49,11 @@ class Writer(abc.ABC):
     @abc.abstractmethod
     def read_concept(self, slug: str) -> Concept | None:
         """Read back a previously written Concept, or ``None`` if it does not exist."""
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def read_document(self, slug: str) -> Document | None:
+        """Read back a previously written Document, or ``None`` if it does not exist."""
         raise NotImplementedError
 
     @abc.abstractmethod

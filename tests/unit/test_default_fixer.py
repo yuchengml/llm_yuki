@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from llm_yuki.adapters.fixing.default_fixer import DefaultFixer
-from llm_yuki.domain.entities import Claim, Concept, ContradictionRef
+from llm_yuki.domain.entities import Claim, Concept, ContradictionRef, Document
 from llm_yuki.domain.error_book import ErrorBook, ValidationIssue
 from llm_yuki.domain.pipeline import CompiledUpdate
 from llm_yuki.ports.writer import Writer
@@ -108,10 +108,14 @@ def test_index_inconsistency_drops_the_colliding_slug() -> None:
 class _FakeWriter(Writer):
     def write_claim(self, claim: Claim) -> None: ...
     def write_concept(self, concept: Concept) -> None: ...
+    def write_document(self, document: Document) -> None: ...
     def read_claim(self, slug: str) -> Claim | None:
         return None
 
     def read_concept(self, slug: str) -> Concept | None:
+        return None
+
+    def read_document(self, slug: str) -> Document | None:
         return None
 
     def list_pages(self) -> list[str]:

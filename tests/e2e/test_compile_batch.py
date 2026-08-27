@@ -66,6 +66,8 @@ class _ScriptedLLMClient:
             return LLMResponse(content=json.dumps({"issues": []}), tokens_in=10, tokens_out=2)
         if "LLMPeriodicFix" in system:
             return LLMResponse(content=json.dumps({"claims": [], "concepts": []}), tokens_in=1, tokens_out=1)
+        if "Document.summary generation" in system:
+            return LLMResponse(content="Doc 1 covers water boiling at sea level.", tokens_in=8, tokens_out=6)
         raise AssertionError(f"unexpected system prompt: {system[:80]!r}")
 
 
@@ -85,7 +87,7 @@ def test_full_pipeline_compiles_one_batch_and_maintains_backlinks(tmp_path: Path
         connector=TxtFileConnector(source_dir),
         writer=writer,
         extractor=LLMExtractor(llm_client, cost_ledger),  # type: ignore[arg-type]
-        merger=DefaultMerger(),
+        merger=DefaultMerger(llm_client, cost_ledger),  # type: ignore[arg-type]
         validator=DefaultValidator(llm_client, cost_ledger),  # type: ignore[arg-type]
         fixer=DefaultFixer(llm_client, cost_ledger),  # type: ignore[arg-type]
         error_book=ErrorBook(),
@@ -106,7 +108,13 @@ def test_full_pipeline_compiles_one_batch_and_maintains_backlinks(tmp_path: Path
     assert "## Related Pages" in body
     assert "- [[water]]" in body
 
+    document = writer.read_document("doc-1")
+    assert document is not None
+    assert document.summary == "Doc 1 covers water boiling at sea level."
+    assert document.produced_claims == ["water-boils"]  # backlink maintained by Writer (D21), not the LLM
+    assert document.produced_concepts == ["water"]
+
     # Extractor.SelectPages is skipped (no cost event) when there are no existing pages to select from yet
     # — LLMExtractor.select_pages returns [] without calling the LLM in that case.
     stages = {event.stage for event in cost_ledger.read_events()}
-    assert stages == {"Extractor.CompileWikiPages", "Validator.ContentValidate"}
+    assert stages == {"Extractor.CompileWikiPages", "Validator.ContentValidate", "Merger.summarize_document"}

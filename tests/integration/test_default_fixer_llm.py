@@ -11,7 +11,7 @@ from llm_yuki.adapters.cost_ledger import JsonlCostLedger
 from llm_yuki.adapters.fixing.default_fixer import DefaultFixer
 from llm_yuki.adapters.llm.client import LLMResponse
 from llm_yuki.adapters.llm.errors import LLMOutputError
-from llm_yuki.domain.entities import Claim, Concept
+from llm_yuki.domain.entities import Claim, Concept, Document
 from llm_yuki.domain.error_book import ErrorBook, ValidationIssue
 from llm_yuki.ports.writer import Writer
 
@@ -22,6 +22,7 @@ class _FakeWriter(Writer):
     def __init__(self) -> None:
         self.claims: dict[str, Claim] = {}
         self.concepts: dict[str, Concept] = {}
+        self.documents: dict[str, Document] = {}
 
     def write_claim(self, claim: Claim) -> None:
         self.claims[claim.slug] = claim
@@ -29,14 +30,20 @@ class _FakeWriter(Writer):
     def write_concept(self, concept: Concept) -> None:
         self.concepts[concept.slug] = concept
 
+    def write_document(self, document: Document) -> None:
+        self.documents[document.slug] = document
+
     def read_claim(self, slug: str) -> Claim | None:
         return self.claims.get(slug)
 
     def read_concept(self, slug: str) -> Concept | None:
         return self.concepts.get(slug)
 
+    def read_document(self, slug: str) -> Document | None:
+        return self.documents.get(slug)
+
     def list_pages(self) -> list[str]:
-        return [*self.claims, *self.concepts]
+        return [*self.claims, *self.concepts, *self.documents]
 
 
 class _FakeLLMClient:
