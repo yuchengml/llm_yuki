@@ -34,6 +34,7 @@ class _FakeWriter(Writer):
         self.written_claims: list[Claim] = []
         self.written_concepts: list[Concept] = []
         self.written_documents: list[Document] = []
+        self.log_events: list[str] = []
 
     def write_claim(self, claim: Claim) -> None:
         self.written_claims.append(claim)
@@ -59,6 +60,9 @@ class _FakeWriter(Writer):
             + [c.slug for c in self.written_concepts]
             + [d.slug for d in self.written_documents]
         )
+
+    def append_log(self, event: str) -> None:
+        self.log_events.append(event)
 
 
 class _FakeExtractor(Extractor):

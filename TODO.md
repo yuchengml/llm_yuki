@@ -81,6 +81,17 @@ its `related_concepts` backlink, since `Writer.write_claim`'s backlink maintenan
 that isn't persisted yet rather than erroring. Fixed by writing concepts first — caught only because the e2e
 test exercises the real `MarkdownWriter`, not a fake.
 
+**Gap found by inspecting a real CLI run's output bundle** (2026-08-27, after the §B2 work above landed):
+`bundle/log.md` was only ever initialized with its `# Log` header — `MarkdownWriter.append_log` existed but
+nothing called it, so proposal `ARCHITECTURE.md` §4.4's requirement ("每次 `UpdateErrorBook`/`VerifyAndClose`
+都要同步寫一筆事件進 `log.md`" — every `UpdateErrorBook`/`VerifyAndClose` call must also write an event to
+`log.md`) was silently unmet. Fixed: `append_log` is now part of the abstract `Writer` port (all fake Writers
+across the test suite updated); `ErrorBook.update_error_book` gained a required `writer` parameter and writes
+one log line per issue (opened or recurring); `ErrorBook.verify_and_close` writes one line per closed entry;
+`Orchestrator` passes `self._writer` through. Verified against a real CLI run with a deliberately dangling
+`related_concepts` reference — `log.md` now records the same `dangling_links` event that lands in
+`error_book.yaml`.
+
 ### B2. New work from the D20–D23 proposal update (2026-08-27) — **implemented and verified**
 
 This resolves the gap tracked below in §D2 ("no guaranteed one-page-per-document") — D21 formally reversed

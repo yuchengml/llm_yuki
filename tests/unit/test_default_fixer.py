@@ -121,6 +121,8 @@ class _FakeWriter(Writer):
     def list_pages(self) -> list[str]:
         return []
 
+    def append_log(self, event: str) -> None: ...
+
 
 def test_llm_periodic_fix_without_llm_client_raises_runtime_error() -> None:
     with pytest.raises(RuntimeError):

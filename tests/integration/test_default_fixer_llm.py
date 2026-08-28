@@ -23,6 +23,7 @@ class _FakeWriter(Writer):
         self.claims: dict[str, Claim] = {}
         self.concepts: dict[str, Concept] = {}
         self.documents: dict[str, Document] = {}
+        self.log_events: list[str] = []
 
     def write_claim(self, claim: Claim) -> None:
         self.claims[claim.slug] = claim
@@ -45,6 +46,9 @@ class _FakeWriter(Writer):
     def list_pages(self) -> list[str]:
         return [*self.claims, *self.concepts, *self.documents]
 
+    def append_log(self, event: str) -> None:
+        self.log_events.append(event)
+
 
 class _FakeLLMClient:
     def __init__(self, content: str) -> None:
@@ -61,6 +65,7 @@ def _book_with_open_content_issue(slug: str = "claim-1") -> ErrorBook:
     book.update_error_book(
         [ValidationIssue(error_type="unsupported_facts", phenomenon="not grounded", affected_refs=[slug])],
         batch_id=1,
+        writer=_FakeWriter(),
     )
     return book
 
@@ -77,7 +82,9 @@ def test_no_open_content_entries_does_not_call_llm(tmp_path: Path) -> None:
 def test_structural_only_entries_are_ignored(tmp_path: Path) -> None:
     book = ErrorBook()
     book.update_error_book(
-        [ValidationIssue(error_type="dangling_links", phenomenon="x", affected_refs=["a"])], batch_id=1
+        [ValidationIssue(error_type="dangling_links", phenomenon="x", affected_refs=["a"])],
+        batch_id=1,
+        writer=_FakeWriter(),
     )
     client = _FakeLLMClient(content="{}")
     fixer = DefaultFixer(client, JsonlCostLedger(tmp_path))  # type: ignore[arg-type]

@@ -107,10 +107,9 @@ class MarkdownWriter(Writer):
     # -- Log -------------------------------------------------------------------
 
     def append_log(self, event: str) -> None:
-        """Append one line to the append-only ``log.md`` audit trail.
+        """Append one line to the append-only ``log.md`` audit trail (§4.4).
 
-        Not yet called by anything — ``ErrorBook`` (which owns log events, see proposal ARCHITECTURE.md §4.4)
-        is still a stub. Exposed now so the Writer's persistence surface is complete once that wiring exists.
+        Called by ``ErrorBook.update_error_book``/``verify_and_close`` — see ``domain/error_book.py``.
         """
         log_path = self._root / "log.md"
         with log_path.open("a", encoding="utf-8") as f:

@@ -163,7 +163,7 @@ class Orchestrator:
         issues = structural_issues + content_issues
 
         if issues:
-            self._error_book.update_error_book(issues, batch_id)
+            self._error_book.update_error_book(issues, batch_id, self._writer)
             if structural_issues:
                 update = self._fixer.code_auto_fix(update, structural_issues)
 

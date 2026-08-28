@@ -60,3 +60,12 @@ class Writer(abc.ABC):
     def list_pages(self) -> list[str]:
         """Return the slugs of all pages currently in the bundle (used for ``index.md`` / orphan checks)."""
         raise NotImplementedError
+
+    @abc.abstractmethod
+    def append_log(self, event: str) -> None:
+        """Append one line to the append-only ``log.md`` audit trail (proposal ARCHITECTURE.md §4.4).
+
+        Called by ``ErrorBook.update_error_book``/``verify_and_close`` — one line per lifecycle event, not
+        called directly by the Orchestrator or any other pipeline stage.
+        """
+        raise NotImplementedError

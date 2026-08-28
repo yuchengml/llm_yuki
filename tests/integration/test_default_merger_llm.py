@@ -21,6 +21,7 @@ class _FakeWriter(Writer):
         self.claims: dict[str, Claim] = {}
         self.concepts: dict[str, Concept] = {}
         self.documents: dict[str, Document] = {}
+        self.log_events: list[str] = []
 
     def write_claim(self, claim: Claim) -> None:
         self.claims[claim.slug] = claim
@@ -42,6 +43,9 @@ class _FakeWriter(Writer):
 
     def list_pages(self) -> list[str]:
         return [*self.claims, *self.concepts, *self.documents]
+
+    def append_log(self, event: str) -> None:
+        self.log_events.append(event)
 
 
 class _FakeLLMClient:

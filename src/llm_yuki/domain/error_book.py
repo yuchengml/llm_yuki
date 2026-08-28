@@ -92,12 +92,16 @@ class ErrorBook(BaseModel):
     )
     _last_periodic_fix_batch: int | None = None
 
-    def update_error_book(self, issues: list[ValidationIssue], batch_id: int) -> list[ErrorBookEntry]:
+    def update_error_book(
+        self, issues: list[ValidationIssue], batch_id: int, writer: Writer
+    ) -> list[ErrorBookEntry]:
         """Algorithm 1 line 8: ``ℬ ← UpdateErrorBook(ℬ, E)`` — Attribute + Constrain (Discover already ran).
 
         Deduplicates against existing *open* entries of the same ``error_type``/``phenomenon``: a repeat
         occurrence merges its ``affected_refs`` into the existing entry rather than creating a new one, so
-        the same recurring mistake doesn't flood the book with duplicate rows.
+        the same recurring mistake doesn't flood the book with duplicate rows. Writes one ``log.md`` audit
+        line per issue via ``writer.append_log`` (proposal ARCHITECTURE.md §4.4, "每次 UpdateErrorBook/
+        VerifyAndClose 都要同步寫一筆事件進 log.md").
         """
         touched: list[ErrorBookEntry] = []
         for issue in issues:
@@ -107,6 +111,10 @@ class ErrorBook(BaseModel):
                     if ref not in existing.affected_refs:
                         existing.affected_refs.append(ref)
                 touched.append(existing)
+                writer.append_log(
+                    f"batch {batch_id}: UpdateErrorBook recurrence of {existing.error_type} entry "
+                    f"{existing.id} — {existing.phenomenon} (refs: {', '.join(issue.affected_refs) or 'none'})"
+                )
                 continue
 
             root_cause = _ROOT_CAUSE_TEMPLATES[issue.error_type]
@@ -121,6 +129,10 @@ class ErrorBook(BaseModel):
             )
             self.entries.append(entry)
             touched.append(entry)
+            writer.append_log(
+                f"batch {batch_id}: UpdateErrorBook opened {entry.error_type} entry {entry.id} — "
+                f"{entry.phenomenon} (refs: {', '.join(entry.affected_refs) or 'none'})"
+            )
         return touched
 
     def active_constraints(self) -> list[str]:
@@ -158,6 +170,10 @@ class ErrorBook(BaseModel):
                 entry.closed_at_batch = batch_id
                 entry.verification_method = f"re-checked at batch {batch_id} against current Writer state"
                 closed.append(entry)
+                writer.append_log(
+                    f"batch {batch_id}: VerifyAndClose closed {entry.error_type} entry {entry.id} — "
+                    f"{entry.phenomenon}"
+                )
         return closed
 
     def _find_open_entry(self, error_type: ErrorType, phenomenon: str) -> ErrorBookEntry | None:
