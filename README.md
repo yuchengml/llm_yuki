@@ -10,11 +10,11 @@
 
 提案的核心假設:以 [OKF (Open Knowledge Format)](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) 規格與 Karpathy 原始 LLM Wiki 三層架構(Raw Sources / Wiki / Schema)為基礎,補上「lint 診斷矛盾 → 根因歸因 → 針對性修正」的差異化機制,把來源文件編譯成一份持續存在、可累積、可雙向連結的結構化知識庫,取代「每次查詢都重新檢索、重新推理」的傳統 RAG 模式 —— 且這套方法論設計上領域無關,可以在特質差異大的領域間移植。
 
-完整背景、已決議事項(D1–D19)、架構細節、範疇與成功判準都在提案文件裡:
+完整背景、已決議事項(D1–D23)、架構細節、範疇與成功判準都在提案文件裡:
 
 | 文件 | 內容 |
 |---|---|
-| [`docs/llm-yuki-v0.1-proposal/README.md`](./docs/llm-yuki-v0.1-proposal/README.md) | 討論稿(scratchpad):動機、已決議事項 D1–D19 |
+| [`docs/llm-yuki-v0.1-proposal/README.md`](./docs/llm-yuki-v0.1-proposal/README.md) | 討論稿(scratchpad):動機、已決議事項 D1–D23 |
 | [`docs/llm-yuki-v0.1-proposal/ARCHITECTURE.md`](./docs/llm-yuki-v0.1-proposal/ARCHITECTURE.md) | Implementation-ready 架構參考(資料模型、模組、演算法、lint、link/backlink、成本統計) |
 | [`docs/llm-yuki-v0.1-proposal/SPEC.md`](./docs/llm-yuki-v0.1-proposal/SPEC.md) | POC Hypothesis、Minimal Scope、Success Criteria |
 | [`docs/llm-yuki-v0.1-proposal/ASSUMPTIONS.md`](./docs/llm-yuki-v0.1-proposal/ASSUMPTIONS.md) | 已知範疇侷限與未查證假設清單 |
@@ -28,9 +28,15 @@
 呼應 `SPEC.md` 的 Minimal Scope:
 
 - 可插拔的 `Connector` 攝入端(預設實作:txt file connector,資料夾 = 文件,`txt` 正文 + `images/`)
-- 段落/概念單位抽取,產出共享核心型別 `Claim` / `Concept`(OKF typed frontmatter,不做固定長度 chunk 切割)
-- 兩層 lint:OKF conformance(結構性)+ 自訂跨頁矛盾偵測(內容性),走 Error Book 五階段生命週期
-- `Writer` 決定性渲染 body 連結、增量維護 backlink,避免 body/frontmatter 不一致
+- 段落/概念單位抽取,產出共享核心型別 `Claim` / `Concept` / `Document`(OKF typed frontmatter,不做固定長度
+  chunk 切割)—— `Document` 是每份 Raw Source 專屬的導覽頁,`summary` 由遞迴 batch-reduce 生成(D21)
+- `Merger` 三層合併保護:陣列欄位聯集(決定性)/ `Concept.summary` 衝突時 LLM 合併 + 70% 長度比例拒絕 / 鎖定
+  欄位(`concept_title`)不受 LLM 輸出影響(D22)
+- 兩層 lint:OKF conformance(結構性,含跨 `Claim`/`Concept`/`Document` 的 slug 碰撞檢查)+ 自訂跨頁矛盾偵測
+  (內容性),走 Error Book 五階段生命週期,每次 Attribute/VerifyAndClose 都同步寫一筆事件進 `log.md`
+- `Writer` 決定性渲染 body 連結、增量維護 backlink(含 `Document.produced_claims`/`produced_concepts`),
+  避免 body/frontmatter 不一致;`index.md` 依核心型別分層(根目錄 + `claims/`/`concepts/`/`documents/` 三份
+  子目錄各自的 `index.md`,D23)
 - 成本統計(`cost_ledger.jsonl`),用於跟向量 RAG、`openwiki` 做量化對照
 
 ---
@@ -111,28 +117,40 @@ bundle/ (OKF-conformant markdown)
 
 # POC Status
 
-`SPEC.md` is decided (2026-08-26), the repository is initialized per the AI-Native Repository Standard, and
-the full compile pipeline (Algorithm 1) is implemented end to end and wired to a CLI:
+`SPEC.md` is decided (2026-08-26), the repository is initialized per the AI-Native Repository Standard, the
+full compile pipeline (Algorithm 1) is implemented end to end and wired to a CLI, and the proposal's D20–D23
+update (`Document` core type, `Merger`'s D22 merge mechanics, D23's hierarchical `index.md`) is implemented
+on top of it:
 
-- **Core types**: `Claim`/`Concept` — the shared OKF typed-frontmatter core types (`domain/entities.py`)
+- **Core types**: `Claim`/`Concept`/`Document` — the three shared OKF typed-frontmatter core types
+  (`domain/entities.py`). `Document` is a per-Raw-Source navigation page (D21) — not a replacement for
+  `Claim.source_ref`, which still points to the Raw Source itself (D17).
 - **`Connector`**: `TxtFileConnector` — reads Raw Sources from a `txt` + `images/` folder layout
   (`adapters/connectors/`)
-- **`Writer`**: `MarkdownWriter` — writes OKF-conformant markdown, renders body links, maintains backlinks
-  (`adapters/writers/`)
+- **`Writer`**: `MarkdownWriter` — writes OKF-conformant markdown under per-type `claims/`/`concepts/`/
+  `documents/` subdirectories (each with its own `index.md`, plus a root `index.md` linking to all three,
+  D23), renders body links deterministically, maintains backlinks (including `Document.produced_claims`/
+  `produced_concepts`), and appends `log.md` audit-trail events (`adapters/writers/`)
 - **`Extractor`**: `LLMExtractor` — LLM-backed `SelectPages`/`CompileWikiPages` (`adapters/llm/extractor.py`)
-- **`Merger`**: `DefaultMerger` — deterministic slug-exact dedupe (`adapters/merging/`)
-- **`Validator`**: `DefaultValidator` — deterministic structural checks (5 types) + LLM-backed content checks
-  (2 types) (`adapters/validation/`)
+- **`Merger`**: `DefaultMerger` — deterministic slug-exact dedupe; three-layer merge protection for `Concept`
+  updates (array union / LLM merge + 70%-length rejection / locked `concept_title`, D22); generates
+  `Document.summary` via recursive batch-reduce over that document's Claims (D21 §1.5) (`adapters/merging/`)
+- **`Validator`**: `DefaultValidator` — deterministic structural checks (5 types, including slug collisions
+  across all three core types) + LLM-backed content checks (2 types) (`adapters/validation/`)
 - **`Fixer`**: `DefaultFixer` — deterministic auto-fix + LLM-backed periodic fix (`adapters/fixing/`)
-- **`ErrorBook`**: full five-phase lifecycle + YAML persistence (`domain/error_book.py`,
-  `adapters/state/error_book_store.py`)
-- **Cost tracking**: `JsonlCostLedger` records every LLM call's token usage/latency (`adapters/cost_ledger.py`)
-- **`Orchestrator`**: runs the whole Algorithm 1 loop over these (`domain/pipeline.py`)
+- **`ErrorBook`**: full five-phase lifecycle + YAML persistence + `log.md` event writes on every
+  Attribute/VerifyAndClose call (§4.4) (`domain/error_book.py`, `adapters/state/error_book_store.py`)
+- **Cost tracking**: `JsonlCostLedger` records every LLM call's token usage/latency, including `Document.summary`'s
+  batch-reduce rounds (`adapters/cost_ledger.py`)
+- **`Orchestrator`**: runs the whole Algorithm 1 loop over these, creates each source's `Document` page, and
+  deterministically anchors every compiled `Claim.source_ref` to the real source id so `Writer` backlink
+  maintenance can find it (`domain/pipeline.py`)
 - **`llm-yuki` CLI**: `compile` wires all of the above into a real `Orchestrator` and runs one batch
   (`src/llm_yuki/cli.py`, see `ARCHITECTURE.md` §5)
 
-Not yet built: the SPEC.md validation experiments themselves (running real `M3SciQA`/`MMDocRAG` data through
-this and measuring against the Success Criteria) — see [`TODO.md`](./TODO.md) §E for what's left. See
+Not yet built: the soft-collision dedup pass (D22, architecture-only by design — see `TODO.md`'s Out of scope
+list) and the SPEC.md validation experiments themselves (running real `M3SciQA`/`MMDocRAG` data through this
+and measuring against the Success Criteria) — see [`TODO.md`](./TODO.md) §E for what's left. See
 `ASSUMPTIONS.md` in the proposal for known open risks (esp. B-1: the deepagents skill extension point is
 unverified — this POC's adapters are all built-in code, not deepagents skills).
 
@@ -231,7 +249,7 @@ This repository is AI-Native: it follows the
 | `.ai/rules/` | Coding, testing, security rules |
 | `.ai/workflows/` | Step-by-step task workflows |
 | `repo-meta/` | Machine-readable ownership/dependency metadata |
-| `docs/llm-yuki-v0.1-proposal/` | The POC's methodology, decisions (D1–D19), spec, and known assumptions |
+| `docs/llm-yuki-v0.1-proposal/` | The POC's methodology, decisions (D1–D23), spec, and known assumptions |
 
 AI agents must read `AGENTS.md` before taking any action in this repository.
 

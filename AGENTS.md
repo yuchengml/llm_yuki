@@ -20,7 +20,7 @@ Before starting any task, read the following documents in order:
 | [DECISIONS.md](./DECISIONS.md) | Engineering/tooling ADRs (package manager, architecture style, etc.) |
 
 The proposal's `README.md` ([docs/llm-yuki-v0.1-proposal/README.md](./docs/llm-yuki-v0.1-proposal/README.md))
-holds the full decision log (D1–D19) with reasoning. Consult it when a design choice in `ARCHITECTURE.md`
+holds the full decision log (D1–D23) with reasoning. Consult it when a design choice in `ARCHITECTURE.md`
 seems arbitrary — it almost certainly traces back to a decision there.
 
 ### Step 2 — Learn the rules
