@@ -18,8 +18,9 @@
 | [`docs/llm-yuki-v0.1-proposal/ARCHITECTURE.md`](./docs/llm-yuki-v0.1-proposal/ARCHITECTURE.md) | Implementation-ready 架構參考(資料模型、模組、演算法、lint、link/backlink、成本統計) |
 | [`docs/llm-yuki-v0.1-proposal/SPEC.md`](./docs/llm-yuki-v0.1-proposal/SPEC.md) | POC Hypothesis、Minimal Scope、Success Criteria |
 | [`docs/llm-yuki-v0.1-proposal/ASSUMPTIONS.md`](./docs/llm-yuki-v0.1-proposal/ASSUMPTIONS.md) | 已知範疇侷限與未查證假設清單 |
+| [`docs/implementation/`](./docs/implementation/) | 現況機制文件:每個子系統實際上怎麼運作(模組、方法、演算法細節),跟上面「為什麼這樣決定」的提案文件是不同層次,互補不重複 |
 
-本 repo 根目錄的 `ARCHITECTURE.md` 只提供 AI-Native Repository Standard 要求的高階摘要;實作 pipeline 邏輯前,請先讀上表的提案文件。
+本 repo 根目錄的 `ARCHITECTURE.md` 只提供 AI-Native Repository Standard 要求的高階摘要;實作 pipeline 邏輯前,請先讀上表的提案文件與 `docs/implementation/`。
 
 ---
 
@@ -61,7 +62,8 @@ llm_yuki/
 │   ├── e2e/
 │   └── fixtures/
 ├── docs/
-│   └── llm-yuki-v0.1-proposal/   # POC proposal: README / ARCHITECTURE / SPEC / ASSUMPTIONS
+│   ├── llm-yuki-v0.1-proposal/   # POC proposal: README / ARCHITECTURE / SPEC / ASSUMPTIONS
+│   └── implementation/           # Current mechanism docs, one file per subsystem
 ├── .ai/
 │   ├── rules/            # python / testing / security rules for AI agents
 │   └── workflows/        # feature-development / bug-fix / refactoring / release-process
@@ -264,6 +266,7 @@ This repository is AI-Native: it follows the
 | `.ai/workflows/` | Step-by-step task workflows |
 | `repo-meta/` | Machine-readable ownership/dependency metadata |
 | `docs/llm-yuki-v0.1-proposal/` | The POC's methodology, decisions (D1–D23), spec, and known assumptions |
+| `docs/implementation/` | How each subsystem actually works today — one file per module, complementary to the proposal above |
 
 AI agents must read `AGENTS.md` before taking any action in this repository.
 
@@ -320,3 +323,4 @@ MIT — see [`LICENSE`](./LICENSE).
 - `CONTRIBUTING.md`
 - `TODO.md`
 - `docs/llm-yuki-v0.1-proposal/`
+- `docs/implementation/`
