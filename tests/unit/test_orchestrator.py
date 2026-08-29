@@ -6,6 +6,8 @@ testable without a real Connector/Writer.
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 from llm_yuki.domain.entities import Claim, Concept, Document
@@ -138,6 +140,41 @@ def test_run_batch_applies_updates_for_every_source() -> None:
     assert len(writer.written_concepts) == 2
     assert {c.claim_text for c in writer.written_claims} == {"hello", "world"}
     assert {d.slug for d in writer.written_documents} == {"doc-a", "doc-b"}
-    # source_ref is anchored to the real source id, overriding _FakeExtractor's hardcoded "doc-1" (D17/D18/D22
-    # "deterministic overrides LLM" — see Orchestrator._anchor_source_refs).
-    assert {c.source_ref for c in writer.written_claims} == {"doc-a", "doc-b"}
+    # source_ref is anchored to <document_slug>#p<passage_index>, overriding _FakeExtractor's hardcoded
+    # "doc-1" (D17/D18/D22 "deterministic overrides LLM" — see Orchestrator._anchor_source_refs). Each
+    # document here is a single natural paragraph (no blank lines), so passage index is always 0.
+    assert {c.source_ref for c in writer.written_claims} == {"doc-a#p0", "doc-b#p0"}
+
+
+class _BarrierExtractor(Extractor):
+    """Proves D12 Phase 1 genuinely runs passages concurrently, not just structurally-separated-but-serial:
+    ``compile_wiki_pages`` blocks on a 2-party barrier, so a call only returns once a *second* Phase 1 call
+    is also in flight. A sequential Orchestrator would deadlock here (and time out) instead of proceeding —
+    deterministic pass/fail, no timing assumptions, so this isn't a flaky test."""
+
+    def __init__(self) -> None:
+        self._barrier = threading.Barrier(2, timeout=5)
+
+    def select_pages(self, passage: str, writer: Writer, batch_id: int) -> list[str]:
+        return []
+
+    def compile_wiki_pages(
+        self, passage: str, selected: list[str], constraints: list[str], batch_id: int
+    ) -> CompiledUpdate:
+        self._barrier.wait()
+        return CompiledUpdate()
+
+
+def test_phase1_runs_passages_from_different_sources_concurrently() -> None:
+    orchestrator = Orchestrator(
+        connector=_FakeConnector({"doc-a": "hello", "doc-b": "world"}),
+        writer=_FakeWriter(),
+        extractor=_BarrierExtractor(),
+        merger=_PassthroughMerger(),
+        validator=_NoopValidator(),
+        fixer=_NoopFixer(),
+        error_book=_NeverDueErrorBook(),
+        max_workers=2,
+    )
+
+    orchestrator.run_batch(batch_id=1)  # would raise BrokenBarrierError (timeout) if Phase 1 were sequential

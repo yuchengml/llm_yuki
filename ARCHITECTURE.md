@@ -17,21 +17,28 @@ loop; all I/O (reading Raw Sources, persisting wiki pages) happens through repla
 ```mermaid
 flowchart LR
     RS[("Raw Sources<br/>folder = document<br/>txt + images/")] --> C["Connector<br/>(input port)"]
-    C --> O
+    C --> SPLIT["passage_splitter<br/>(D11: natural paragraphs)"]
+    SPLIT --> O
 
     subgraph O["Orchestrator (domain, no I/O)"]
         direction TB
-        EX["Extractor"] --> ME["Merger"]
-        ME --> VA["Validator"]
-        VA --> EB["ErrorBook"]
-        EB --> FX["Fixer"]
-        FX -. "constraints for next round" .-> EX
+        subgraph P1["Phase 1 — parallel across every passage (D12)"]
+            EX["Extractor<br/>SelectPages + CompileWikiPages"]
+        end
+        P1 --> P2
+        subgraph P2["Phase 2 — sequential, one passage at a time (D12)"]
+            direction TB
+            ME["Merger"] --> VA["Validator"]
+            VA --> EB["ErrorBook"]
+            EB --> FX["Fixer"]
+        end
+        FX -. "constraints for next batch" .-> EX
     end
 
-    ME --> W["Writer<br/>(output port)"]
+    P2 --> W["Writer<br/>(output port)"]
     EB -. "log.md events" .-> W
     W --> FS[("bundle/<br/>OKF markdown")]
-    EB --> PS[("pipeline-state/<br/>error_book.yaml")]
+    EB --> ST[("pipeline-state/<br/>error_book.yaml")]
 ```
 
 ---
@@ -40,7 +47,14 @@ flowchart LR
 
 ### 2.1 `llm_yuki.domain` — core logic, no I/O
 
-- `Orchestrator`: runs the compile loop (Algorithm 1; see proposal `ARCHITECTURE.md` §3)
+- `Orchestrator`: runs the compile loop (Algorithm 1; see proposal `ARCHITECTURE.md` §3) as D12's two phases —
+  Phase 1 (`SelectPages`/`CompileWikiPages`) runs concurrently across every passage in the batch
+  (`concurrent.futures.ThreadPoolExecutor`, `max_workers`), read-only against `Writer`; Phase 2 (`Merger`/
+  `Validator`/`ErrorBook`/`Fixer`/writes) runs sequentially, one passage at a time, to avoid concurrent write
+  conflicts
+- `passage_splitter.split_into_natural_paragraphs`: default blank-line-delimited natural-paragraph splitter
+  (D11) — the `Orchestrator`'s extraction unit, not a fixed-length chunker; per-corpus splitting stays
+  delegated to a future domain skill (D3)
 - `Extractor` / `Merger` / `Validator` / `ErrorBook` / `Fixer`: sub-steps of the loop (proposal `ARCHITECTURE.md` §2.2)
 - **Forbidden**: importing anything from `llm_yuki.adapters`, filesystem or network access, and any
   domain-specific (per-corpus) rule — those belong to a future skill layer, not the core pipeline
@@ -110,5 +124,6 @@ D3) — without touching the `Orchestrator`.
 Pipeline execution is exposed as a **CLI first** — `llm_yuki.cli` (installed as the `llm-yuki` script; see
 `pyproject.toml` `[tool.poetry.scripts]`). No web/API service is planned for this POC. The `compile`
 subcommand wires every concrete adapter (§2.3) into a real `Orchestrator` and runs one batch end to end;
-missing/invalid LLM configuration (`OPENAI_API_KEY`/`OPENAI_BASE_URL`/`LLM_MODEL`) fails fast at startup with
-a clear error, before any batch work starts, rather than partway through one.
+`--max-workers` (default 4) caps Phase 1's concurrency (D12); missing/invalid LLM configuration
+(`OPENAI_API_KEY`/`OPENAI_BASE_URL`/`LLM_MODEL`) fails fast at startup with a clear error, before any batch
+work starts, rather than partway through one.

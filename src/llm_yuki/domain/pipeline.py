@@ -9,14 +9,19 @@ that swapping in real implementations later requires no change to this file.
 from __future__ import annotations
 
 import abc
+from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from llm_yuki.domain.entities import Claim, Concept
 from llm_yuki.domain.entities import Document as WikiDocument
 from llm_yuki.domain.error_book import ErrorBook, ValidationIssue
-from llm_yuki.ports.connector import Connector, Document
+from llm_yuki.domain.passage_splitter import split_into_natural_paragraphs
+from llm_yuki.ports.connector import Connector
 from llm_yuki.ports.writer import Writer
+
+_DEFAULT_MAX_WORKERS = 4
 
 
 @dataclass
@@ -115,11 +120,36 @@ class Fixer(abc.ABC):
         raise NotImplementedError
 
 
+@dataclass(frozen=True)
+class _Passage:
+    """One D11 extraction unit — a natural paragraph — plus enough provenance to route it through D12's
+    two phases and anchor its Claims' ``source_ref`` back to a real position in the source (§1.2).
+    """
+
+    document_slug: str
+    index: int
+    text: str
+
+
+@dataclass(frozen=True)
+class _Phase1Result:
+    """Phase 1's parallel output for one passage — everything Phase 2 needs, nothing it has to recompute."""
+
+    passage: _Passage
+    selected: list[str]
+    update: CompiledUpdate
+
+
 class Orchestrator:
     """Runs Algorithm 1 (proposal ARCHITECTURE.md §3) over one batch of Raw Sources.
 
     Domain-agnostic by construction: it only calls the interfaces above plus the ``Connector``/``Writer``
-    ports — never anything corpus-specific (AGENTS.md §4, proposal README.md D3).
+    ports — never anything corpus-specific (AGENTS.md §4, proposal README.md D3). Execution follows D12's
+    two-phase strategy: Phase 1 (``SelectPages``/``CompileWikiPages``) runs in parallel across every passage
+    in the batch, each comparing against the same read-only ``Writer`` snapshot (nothing is written until
+    Phase 2 starts, so "current Writer state" and "the Phase 1 snapshot" are the same thing here); Phase 2
+    (``Merger``/``Validator``/``ErrorBook``/``Fixer``/``ApplyUpdates``) then runs sequentially, one passage
+    at a time, to avoid concurrent write conflicts (D12).
     """
 
     def __init__(
@@ -131,6 +161,7 @@ class Orchestrator:
         validator: Validator,
         fixer: Fixer,
         error_book: ErrorBook,
+        max_workers: int = _DEFAULT_MAX_WORKERS,
     ) -> None:
         self._connector = connector
         self._writer = writer
@@ -139,27 +170,85 @@ class Orchestrator:
         self._validator = validator
         self._fixer = fixer
         self._error_book = error_book
+        self._max_workers = max_workers
 
     def run_batch(self, batch_id: int) -> None:
-        """Algorithm 1, lines 1-17, for every source in the Connector's current batch."""
+        """Algorithm 1, lines 1-17, over every passage of every source in the Connector's current batch."""
         constraints = self._error_book.active_constraints()
+        passages = self._collect_passages()
+        document_slugs = _unique_in_order(passage.document_slug for passage in passages)
 
-        for ref in self._connector.list_sources():
-            document = self._connector.read_source(ref)
-            self._compile_passage(document, constraints, batch_id)
+        phase1_results = self._run_phase1(passages, constraints, batch_id)
+
+        # Documents are created only now — right before Phase 2's first write — not any earlier: they don't
+        # yet have a summary or any backlinks, so surfacing them to Phase 1's SelectPages as an "existing
+        # page" would just spend an LLM call for a page with nothing useful to say (see _describe_page).
+        self._ensure_document_pages(document_slugs)
+
+        for result in phase1_results:
+            self._run_phase2(result, batch_id)
+
+        self._finalize_document_summaries(document_slugs, batch_id)
 
         if self._error_book.periodic_fix_due(batch_id):
             self._fixer.llm_periodic_fix(self._error_book, self._writer, batch_id)
             self._error_book.verify_and_close(self._writer, batch_id)
 
-    def _compile_passage(self, document: Document, constraints: list[str], batch_id: int) -> None:
-        """Algorithm 1 lines 1-12 for a single source passage."""
-        selected = self._extractor.select_pages(document.text, self._writer, batch_id)
-        update = self._extractor.compile_wiki_pages(document.text, selected, constraints, batch_id)
-        update = self._merger.merge(update, self._writer, batch_id)
+    def _collect_passages(self) -> list[_Passage]:
+        """D11: split every source's text into natural paragraphs — the actual extraction units."""
+        passages: list[_Passage] = []
+        for ref in self._connector.list_sources():
+            document = self._connector.read_source(ref)
+            for index, text in enumerate(split_into_natural_paragraphs(document.text)):
+                passages.append(_Passage(document_slug=ref.id, index=index, text=text))
+        return passages
 
-        structural_issues = self._validator.structural_validate(update, selected, self._writer)
-        content_issues = self._validator.content_validate(update, document.text, self._writer, batch_id)
+    def _ensure_document_pages(self, document_slugs: list[str]) -> None:
+        """D21: create every source's ``Document`` navigation page up front, before any Claim is written.
+
+        Must happen before Phase 2 starts writing (not per-passage, since one document's passages are now
+        interleaved with other documents' across the whole batch) so ``Writer.write_claim``'s backlink
+        maintenance can attach ``produced_claims``/``produced_concepts`` regardless of processing order.
+        ``summary`` starts empty and is filled in by :meth:`_finalize_document_summaries` once every passage
+        of that document has gone through Phase 2. This POC assumes each Raw Source is only ever ingested
+        once (D21's explicit exclusion), so an already-existing Document page is left untouched.
+        """
+        for slug in document_slugs:
+            if self._writer.read_document(slug) is not None:
+                continue
+            self._writer.write_document(
+                WikiDocument(
+                    slug=slug,
+                    document_title=slug,
+                    source_path=slug,
+                    ingested_at=datetime.now(UTC).date().isoformat(),
+                    summary="",
+                )
+            )
+
+    def _run_phase1(
+        self, passages: list[_Passage], constraints: list[str], batch_id: int
+    ) -> list[_Phase1Result]:
+        """D12 Phase 1: ``SelectPages``/``CompileWikiPages`` in parallel across every passage in the batch."""
+        if not passages:
+            return []
+        with ThreadPoolExecutor(max_workers=min(self._max_workers, len(passages))) as pool:
+            futures = [pool.submit(self._extract_one, passage, constraints, batch_id) for passage in passages]
+            return [future.result() for future in futures]
+
+    def _extract_one(self, passage: _Passage, constraints: list[str], batch_id: int) -> _Phase1Result:
+        """Algorithm 1 lines 1-3 for one passage — the unit of work Phase 1 parallelizes over."""
+        selected = self._extractor.select_pages(passage.text, self._writer, batch_id)
+        update = self._extractor.compile_wiki_pages(passage.text, selected, constraints, batch_id)
+        return _Phase1Result(passage=passage, selected=selected, update=update)
+
+    def _run_phase2(self, result: _Phase1Result, batch_id: int) -> None:
+        """D12 Phase 2 for one passage: merge/validate/fix/write, sequential to avoid concurrent write races."""
+        passage = result.passage
+        update = self._merger.merge(result.update, self._writer, batch_id)
+
+        structural_issues = self._validator.structural_validate(update, result.selected, self._writer)
+        content_issues = self._validator.content_validate(update, passage.text, self._writer, batch_id)
         issues = structural_issues + content_issues
 
         if issues:
@@ -167,32 +256,28 @@ class Orchestrator:
             if structural_issues:
                 update = self._fixer.code_auto_fix(update, structural_issues)
 
-        update = CompiledUpdate(claims=_anchor_source_refs(update.claims, document.ref.id), concepts=update.concepts)
-        self._ensure_document_page(document.ref.id, update.claims, batch_id)
-        self._apply_updates(update)
+        claims = _anchor_source_refs(update.claims, passage.document_slug, passage.index)
+        self._apply_updates(CompiledUpdate(claims=claims, concepts=update.concepts))
 
-    def _ensure_document_page(self, document_slug: str, claims: list[Claim], batch_id: int) -> None:
-        """D21: create this source's ``Document`` navigation page, if it doesn't exist yet.
+    def _finalize_document_summaries(self, document_slugs: list[str], batch_id: int) -> None:
+        """D21 §1.5: once every passage of a document has gone through Phase 2, (re)generate its summary.
 
-        Written *before* ``_apply_updates`` so ``Writer.write_claim``'s backlink maintenance (D21, same
-        mechanism as D18's ``Concept.key_facts``) can attach ``produced_claims``/``produced_concepts`` to it
-        immediately. This POC assumes each Raw Source is only ever ingested once (D21's explicit exclusion —
-        no re-ingest/incremental-update scenario), so an existing Document page is left untouched.
+        Reads the now-complete ``produced_claims`` backlink (maintained incrementally by ``Writer`` across
+        every passage of this document, regardless of how many there were) rather than tracking claims
+        in-memory during Phase 2 — the persisted backlink is the same source of truth the rest of the
+        pipeline already treats as authoritative.
         """
-        if self._writer.read_document(document_slug) is not None:
-            return
-
-        claim_texts = [claim.claim_text for claim in claims]
-        summary = self._merger.summarize_document(document_slug, claim_texts, self._writer, batch_id)
-        self._writer.write_document(
-            WikiDocument(
-                slug=document_slug,
-                document_title=document_slug,
-                source_path=document_slug,
-                ingested_at=datetime.now(UTC).date().isoformat(),
-                summary=summary,
-            )
-        )
+        for slug in document_slugs:
+            document = self._writer.read_document(slug)
+            if document is None:
+                continue
+            claim_texts = [
+                claim.claim_text
+                for claim_slug in document.produced_claims
+                if (claim := self._writer.read_claim(claim_slug)) is not None
+            ]
+            summary = self._merger.summarize_document(slug, claim_texts, self._writer, batch_id)
+            self._writer.write_document(document.model_copy(update={"summary": summary}))
 
     def _apply_updates(self, update: CompiledUpdate) -> None:
         """Algorithm 1 line 12: ``W ← ApplyUpdates(W, U)``.
@@ -207,16 +292,20 @@ class Orchestrator:
             self._writer.write_claim(claim)
 
 
-def _anchor_source_refs(claims: list[Claim], document_slug: str) -> list[Claim]:
-    """Force every Claim's ``source_ref`` document-id segment to the real source id (D17/D18/D22 "deterministic
-    overrides LLM"): the Extractor's LLM call may invent/misformat this id, but the Orchestrator already knows
-    the ground truth, and ``Document`` backlink maintenance (``Writer``) depends on the two matching exactly.
-    Runs after structural validation/``CodeAutoFix``, so malformed-ref lint signals are computed on the LLM's
-    original value first — this only touches the leading id, never the ``#locator`` suffix.
+def _unique_in_order(values: Iterable[str]) -> list[str]:
+    """De-duplicate while preserving first-seen order (``dict.fromkeys`` trick, no external dependency)."""
+    return list(dict.fromkeys(values))
+
+
+def _anchor_source_refs(claims: list[Claim], document_slug: str, passage_index: int) -> list[Claim]:
+    """Force every Claim's ``source_ref`` to ``<document_slug>#p<passage_index>`` (D17/D18/D22 "deterministic
+    overrides LLM"): the Extractor's LLM call has no reliable way to know the real source id or this
+    passage's actual position, but the Orchestrator does — and ``Document`` backlink maintenance (``Writer``)
+    depends on the document-id segment matching exactly. Runs after structural validation/``CodeAutoFix``, so
+    malformed-ref lint signals are still computed on the LLM's original value first.
     """
-    anchored = []
-    for claim in claims:
-        _, _, locator = claim.source_ref.partition("#")
-        new_ref = f"{document_slug}#{locator}" if locator else document_slug
-        anchored.append(claim if new_ref == claim.source_ref else claim.model_copy(update={"source_ref": new_ref}))
-    return anchored
+    new_ref = f"{document_slug}#p{passage_index}"
+    return [
+        claim if claim.source_ref == new_ref else claim.model_copy(update={"source_ref": new_ref})
+        for claim in claims
+    ]

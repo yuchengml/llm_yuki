@@ -28,8 +28,12 @@
 呼應 `SPEC.md` 的 Minimal Scope:
 
 - 可插拔的 `Connector` 攝入端(預設實作:txt file connector,資料夾 = 文件,`txt` 正文 + `images/`)
-- 段落/概念單位抽取,產出共享核心型別 `Claim` / `Concept` / `Document`(OKF typed frontmatter,不做固定長度
-  chunk 切割)—— `Document` 是每份 Raw Source 專屬的導覽頁,`summary` 由遞迴 batch-reduce 生成(D21)
+- 抽取粒度採**自然段落**單位(空行分段的預設切分器,`domain/passage_splitter.py`),不做固定長度 chunk 切割
+  (D11);產出共享核心型別 `Claim` / `Concept` / `Document`(OKF typed frontmatter)—— `Document` 是每份 Raw
+  Source 專屬的導覽頁,`summary` 由遞迴 batch-reduce 生成,彙整該文件**所有段落**產出的 `Claim`(D21)
+- 執行策略分兩階段(D12):**Phase 1 平行**(`SelectPages`/`CompileWikiPages`,同批次每個段落各自比對同一份
+  wiki index 快照,`ThreadPoolExecutor` 實作,worker 數可由 CLI `--max-workers` 調整)、**Phase 2 序列化**
+  (`Merger`/`Validator`/`ErrorBook`/`Fixer`/寫入,依序執行避免並發寫入衝突)
 - `Merger` 三層合併保護:陣列欄位聯集(決定性)/ `Concept.summary` 衝突時 LLM 合併 + 70% 長度比例拒絕 / 鎖定
   欄位(`concept_title`)不受 LLM 輸出影響(D22)
 - 兩層 lint:OKF conformance(結構性,含跨 `Claim`/`Concept`/`Document` 的 slug 碰撞檢查)+ 自訂跨頁矛盾偵測
@@ -118,15 +122,19 @@ bundle/ (OKF-conformant markdown)
 # POC Status
 
 `SPEC.md` is decided (2026-08-26), the repository is initialized per the AI-Native Repository Standard, the
-full compile pipeline (Algorithm 1) is implemented end to end and wired to a CLI, and the proposal's D20–D23
+full compile pipeline (Algorithm 1) is implemented end to end and wired to a CLI, the proposal's D20–D23
 update (`Document` core type, `Merger`'s D22 merge mechanics, D23's hierarchical `index.md`) is implemented
-on top of it:
+on top of it, and D11/D12 (natural-paragraph passage splitting, Phase 1 parallel / Phase 2 sequential
+execution — previously never actually built, despite being decided from the start) landed last:
 
 - **Core types**: `Claim`/`Concept`/`Document` — the three shared OKF typed-frontmatter core types
   (`domain/entities.py`). `Document` is a per-Raw-Source navigation page (D21) — not a replacement for
   `Claim.source_ref`, which still points to the Raw Source itself (D17).
 - **`Connector`**: `TxtFileConnector` — reads Raw Sources from a `txt` + `images/` folder layout
   (`adapters/connectors/`)
+- **Passage splitting**: `split_into_natural_paragraphs` — default blank-line-delimited natural-paragraph
+  splitter (D11), pure/no I/O; the real per-corpus splitting rule is still delegated to a future domain
+  skill (D3) (`domain/passage_splitter.py`)
 - **`Writer`**: `MarkdownWriter` — writes OKF-conformant markdown under per-type `claims/`/`concepts/`/
   `documents/` subdirectories (each with its own `index.md`, plus a root `index.md` linking to all three,
   D23), renders body links deterministically, maintains backlinks (including `Document.produced_claims`/
@@ -142,9 +150,13 @@ on top of it:
   Attribute/VerifyAndClose call (§4.4) (`domain/error_book.py`, `adapters/state/error_book_store.py`)
 - **Cost tracking**: `JsonlCostLedger` records every LLM call's token usage/latency, including `Document.summary`'s
   batch-reduce rounds (`adapters/cost_ledger.py`)
-- **`Orchestrator`**: runs the whole Algorithm 1 loop over these, creates each source's `Document` page, and
-  deterministically anchors every compiled `Claim.source_ref` to the real source id so `Writer` backlink
-  maintenance can find it (`domain/pipeline.py`)
+- **`Orchestrator`**: runs Algorithm 1 as D12's two phases — Phase 1 (`SelectPages`/`CompileWikiPages`) in
+  parallel across every passage in the batch (`ThreadPoolExecutor`, `max_workers`), Phase 2 (`Merger`/
+  `Validator`/`ErrorBook`/`Fixer`/writes) sequentially per passage to avoid concurrent write conflicts;
+  creates each source's `Document` page once Phase 1 is done, and finalizes its `summary` once every one of
+  that document's passages has gone through Phase 2; deterministically anchors every compiled
+  `Claim.source_ref` to `<source id>#p<passage index>` so `Writer` backlink maintenance can find it
+  (`domain/pipeline.py`)
 - **`llm-yuki` CLI**: `compile` wires all of the above into a real `Orchestrator` and runs one batch
   (`src/llm_yuki/cli.py`, see `ARCHITECTURE.md` §5)
 
@@ -182,10 +194,12 @@ poetry run llm-yuki compile <source_dir> <bundle_dir>
 `.env` (in the directory you run the command from, or a parent of it) is loaded automatically — no need to
 `export` it into the shell yourself; a real environment variable always takes precedence over the `.env`
 value if both are set. Runs one compile batch (Algorithm 1) over `<source_dir>` (a Raw Sources folder — one
-subfolder per document, each with a `.txt` body) and writes the resulting OKF bundle to `<bundle_dir>`.
-Pipeline-internal state (`error_book.yaml`, `cost_ledger.jsonl`) is written to a `pipeline-state` sibling of
-`<bundle_dir>` by default (override with `--pipeline-state-dir`). Missing LLM configuration fails immediately
-at startup with a clear message, not partway through a batch. See `ARCHITECTURE.md` §5.
+subfolder per document, each with a `.txt` body, split into natural paragraphs — D11) and writes the
+resulting OKF bundle to `<bundle_dir>`. Pipeline-internal state (`error_book.yaml`, `cost_ledger.jsonl`) is
+written to a `pipeline-state` sibling of `<bundle_dir>` by default (override with `--pipeline-state-dir`).
+`--max-workers N` (default 4) caps how many Phase 1 extraction calls run concurrently (D12). Missing LLM
+configuration fails immediately at startup with a clear message, not partway through a batch. See
+`ARCHITECTURE.md` §5.
 
 ## Run Tests
 

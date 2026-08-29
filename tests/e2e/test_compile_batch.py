@@ -48,6 +48,21 @@ _COMPILE_RESULT = {
     ],
 }
 
+_COMPILE_RESULT_FREEZES = {
+    "claims": [
+        {
+            "slug": "water-freezes",
+            "claim_text": "Water freezes at 0C at sea level.",
+            "source_ref": "placeholder",
+            "confidence": 0.9,
+            "provenance_state": "extracted",
+            "related_concepts": ["water"],
+            "contradicted_by": [],
+        }
+    ],
+    "concepts": [],
+}
+
 
 class _ScriptedLLMClient:
     """Dispatches on which system prompt was used, so one fake stands in for all three LLM-backed stages."""
@@ -58,10 +73,12 @@ class _ScriptedLLMClient:
     def complete(self, messages: list[dict[str, str]], *, response_format_json: bool = False) -> LLMResponse:
         self.calls.append(messages)
         system = messages[0]["content"]
+        user = messages[-1]["content"]
         if "SelectPages" in system:
             return LLMResponse(content=json.dumps({"selected": []}), tokens_in=5, tokens_out=2)
         if "CompileWikiPages" in system:
-            return LLMResponse(content=json.dumps(_COMPILE_RESULT), tokens_in=20, tokens_out=15)
+            result = _COMPILE_RESULT_FREEZES if "freezes" in user.lower() else _COMPILE_RESULT
+            return LLMResponse(content=json.dumps(result), tokens_in=20, tokens_out=15)
         if "ContentValidate" in system:
             return LLMResponse(content=json.dumps({"issues": []}), tokens_in=10, tokens_out=2)
         if "LLMPeriodicFix" in system:
@@ -118,3 +135,57 @@ def test_full_pipeline_compiles_one_batch_and_maintains_backlinks(tmp_path: Path
     # — LLMExtractor.select_pages returns [] without calling the LLM in that case.
     stages = {event.stage for event in cost_ledger.read_events()}
     assert stages == {"Extractor.CompileWikiPages", "Validator.ContentValidate", "Merger.summarize_document"}
+
+
+def test_multi_paragraph_document_splits_into_passages_and_aggregates_across_them(tmp_path: Path) -> None:
+    """D11 + D12: a document with a blank-line paragraph break becomes two passages, Phase 1 extracts both
+    in parallel, Phase 2 applies both sequentially, and Document.summary/produced_claims/Concept.key_facts
+    all aggregate across both — not just the last one processed."""
+    source_dir = tmp_path / "raw_sources"
+    doc_dir = source_dir / "doc-1"
+    doc_dir.mkdir(parents=True)
+    (doc_dir / "body.txt").write_text(
+        "Water boils at 100C at sea level.\n\nWater freezes at 0C at sea level.", encoding="utf-8"
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    pipeline_state_dir = tmp_path / "pipeline-state"
+    llm_client = _ScriptedLLMClient()
+    cost_ledger = JsonlCostLedger(pipeline_state_dir)
+    writer = MarkdownWriter(bundle_dir)
+
+    orchestrator = Orchestrator(
+        connector=TxtFileConnector(source_dir),
+        writer=writer,
+        extractor=LLMExtractor(llm_client, cost_ledger),  # type: ignore[arg-type]
+        merger=DefaultMerger(llm_client, cost_ledger),  # type: ignore[arg-type]
+        validator=DefaultValidator(llm_client, cost_ledger),  # type: ignore[arg-type]
+        fixer=DefaultFixer(llm_client, cost_ledger),  # type: ignore[arg-type]
+        error_book=ErrorBook(),
+    )
+
+    orchestrator.run_batch(batch_id=1)
+
+    boils = writer.read_claim("water-boils")
+    freezes = writer.read_claim("water-freezes")
+    assert boils is not None and freezes is not None
+    # D11 §1.2: source_ref anchored to <document_slug>#p<passage_index> — one per natural paragraph.
+    assert boils.source_ref == "doc-1#p0"
+    assert freezes.source_ref == "doc-1#p1"
+
+    concept = writer.read_concept("water")
+    assert concept is not None
+    # Both passages' Claims backlink onto the same Concept — accumulated, not overwritten by the second.
+    assert concept.key_facts == ["water-boils", "water-freezes"]
+
+    document = writer.read_document("doc-1")
+    assert document is not None
+    assert document.produced_claims == ["water-boils", "water-freezes"]
+    assert document.produced_concepts == ["water"]
+    # Document.summary is generated once, after both passages have gone through Phase 2 — not per-passage.
+    assert document.summary == "Doc 1 covers water boiling at sea level."
+    summarize_events = [e for e in cost_ledger.read_events() if e.stage == "Merger.summarize_document"]
+    assert len(summarize_events) == 1
+
+    compile_events = [e for e in cost_ledger.read_events() if e.stage == "Extractor.CompileWikiPages"]
+    assert len(compile_events) == 2  # one Phase 1 call per passage

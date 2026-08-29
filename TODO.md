@@ -15,7 +15,9 @@
         deepagents skill) is unverified and high-risk. `knowledge-base/frameworks/deepagents-0.7.6/analysis.md`
         is still missing; this was deliberately deferred (README.md proposal, "下一步"), not resolved.
   - [ ] **B-2** — `contradicted_by` recall under Phase 1's parallel extraction is unverified (medium risk).
-        Needs a small-scale data check early in scaffolding.
+        Needs a small-scale data check early in scaffolding. Now that Phase 1 parallelism is actually
+        implemented (§B3), a second, related same-batch-blind-spot risk was found: a false-positive Unseen
+        Overwrite when two passages of one batch touch the same page — see §B3's last bullet.
 
 ## B. Core domain logic (fill in the stubs)
 
@@ -120,12 +122,10 @@ field; and an empty `error_book.yaml` (no structural/content issues on this clea
       segment matching the real `Document.slug` — see the `Orchestrator._anchor_source_refs` note below.
 - [x] **`Document.summary` recursive batch-reduce generation** (D21 §1.5) → `Merger.summarize_document` in
       `adapters/merging/default_merger.py::DefaultMerger`:
-      1. **Trigger simplified from the original design**: `TxtFileConnector` currently produces exactly one
-         passage per document, so "all of a document's passages are done" is trivially true right after that
-         one `compile_wiki_pages` call — no cross-passage bookkeeping was needed. `Orchestrator._compile_passage`
-         calls `_ensure_document_page` (which calls `summarize_document`) once per source, right before
-         `_apply_updates`, using that passage's final (post-`CodeAutoFix`) `Claim.claim_text`s. Revisit if a
-         future `Connector` ever splits one document into multiple passages.
+      1. **Trigger** (updated 2026-08-29 — see §B3): `Orchestrator._finalize_document_summaries` calls this
+         once per document, after *every* passage of that document has gone through Phase 2 (not per-passage;
+         a document can now have multiple passages — D11/D12, §B3), using the document's complete
+         `produced_claims` backlink to gather every `Claim.claim_text` it produced across all its passages.
       2. Collects the document's `Claim.claim_text`s, checks against a fixed character-count budget
          (`_DOCUMENT_BUDGET_CHARS`, spirit borrowed from `context-budget.ts`, not token-accurate) — fits: one
          LLM call summarizes directly; doesn't fit: batch the claims, summarize each batch, recurse on the
@@ -183,12 +183,64 @@ field; and an empty `error_book.yaml` (no structural/content issues on this clea
       scope to the new third type. A true `index.md`-vs-filesystem diff (per-subdirectory or otherwise) remains
       unimplemented — pre-existing gap, not introduced or worsened by D23.
 - [x] **Missing `Document` page reclassified as Incomplete Pages, not a new error type (D21 point 5) — satisfied
-      by construction, no Validator check added.** `Orchestrator._ensure_document_page` now runs unconditionally
-      for every source `run_batch` processes (before `_apply_updates`), so a processed Raw Source without a
-      `Document` page can't occur through this pipeline's normal flow — there's no reachable state for a
-      Validator-side check to catch, and `structural_validate`'s signature (`update`/`selected`/`writer`, no
-      source-ref) has no natural way to know "which source is this batch currently on" without a broader
-      interface change for a condition that's already structurally impossible.
+      by construction, no Validator check added.** `Orchestrator._ensure_document_pages` runs unconditionally
+      for every source `run_batch` processes (before Phase 2's first write — see §B3 below for why this moved
+      off the old per-passage `_compile_passage`), so a processed Raw Source without a `Document` page can't
+      occur through this pipeline's normal flow — there's no reachable state for a Validator-side check to
+      catch, and `structural_validate`'s signature (`update`/`selected`/`writer`, no source-ref) has no
+      natural way to know "which source is this batch currently on" without a broader interface change for a
+      condition that's already structurally impossible.
+
+### B3. D11/D12: natural-paragraph passage splitting + Phase 1 parallel / Phase 2 sequential (2026-08-29) — **implemented and verified**
+
+Neither of these was ever actually built — `TxtFileConnector` fed each whole document to the Extractor as a
+single "passage" (no paragraph splitting at all, D11 unimplemented), and `Orchestrator.run_batch` processed
+one document at a time, fully sequentially end-to-end (D12's two-phase parallel/sequential split
+unimplemented — previously listed in this file's "Out of scope" section, which was a mischaracterization:
+it was deferred work, not a deliberate scope cut). Now implemented:
+
+- [x] **`domain/passage_splitter.py::split_into_natural_paragraphs`** (D11): blank-line-delimited natural
+      paragraphs, pure/no I/O, domain-agnostic. A document with no blank lines becomes exactly one passage
+      (still a valid natural unit, per D11) — this is why every pre-existing single-line test fixture kept
+      passing unmodified. The real per-corpus splitting rule is still delegated to a future domain skill
+      (D3, B-1) — this is only the core pipeline's own baseline default.
+- [x] **`Orchestrator` restructured around D12's two phases** (`domain/pipeline.py`):
+      1. `_collect_passages`: reads every source via `Connector`, splits each into passages.
+      2. Phase 1 (`_run_phase1`/`_extract_one`): `SelectPages`+`CompileWikiPages` for every passage in the
+         batch, run concurrently via `concurrent.futures.ThreadPoolExecutor` (`max_workers`, constructor arg,
+         CLI `--max-workers`, default 4). Genuinely parallel, not just structurally separated — proven by
+         `tests/unit/test_orchestrator.py::test_phase1_runs_passages_from_different_sources_concurrently`
+         (a 2-party `threading.Barrier` that only resolves if two Phase 1 calls are in flight at once;
+         deterministic pass/fail, not timing-based). Read-only against `Writer` — nothing is written until
+         Phase 2, so "current Writer state during Phase 1" and "the batch-start snapshot" are the same thing,
+         satisfying the proposal's "各自比對 wiki index 的 snapshot" without needing an explicit snapshot object.
+      3. `_ensure_document_pages` (D21): creates every batch's `Document` placeholders once, after Phase 1,
+         right before Phase 2's first write — not per-passage any more, since one document's passages are now
+         interleaved with other documents' across the whole batch.
+      4. Phase 2 (`_run_phase2`, one call per passage, sequential): `Merger`/`Validator`/`ErrorBook`/`Fixer`/
+         `ApplyUpdates`, in passage order — matches D12's "序列化執行...避免並發寫入衝突" (serialized, to avoid
+         concurrent write conflicts).
+      5. `_finalize_document_summaries` (D21 §1.5): after *all* of a batch's Phase 2 writes are done, not
+         per-passage — re-reads each touched Document's now-complete `produced_claims` backlink and generates
+         its `summary` once. Multi-passage documents previously couldn't exist under the old design, so this
+         didn't need to change until now: `Document.summary` must reflect every passage's Claims, not just
+         the first one processed.
+      6. `_anchor_source_refs` (D17/D18/D22 "deterministic overrides LLM") upgraded from `<document_slug>`
+         (optionally keeping whatever locator the LLM guessed) to always `<document_slug>#p<passage_index>` —
+         a real, deterministic pointer to which natural paragraph a Claim came from, not an LLM-invented one.
+- [x] **`JsonlCostLedger.record` made thread-safe** (`threading.Lock`) — Phase 1 now calls it concurrently
+      from multiple `Extractor` calls sharing one ledger instance.
+- [ ] **New risk, discovered by implementing D12 properly — extends B-2, not yet mitigated**: when two
+      passages *of the same batch* independently produce a candidate touching the *same* existing-by-then
+      page (e.g. two paragraphs of one document both emit a `Concept` update for the same slug), the second
+      passage's Phase 1 `SelectPages` ran before that page existed (same snapshot problem as B-2's
+      `contradicted_by` gap) — so the page is outside its `selected` list, and `StructuralValidate` flags a
+      **false-positive Unseen Overwrite** at Phase 2 time, which `CodeAutoFix` then drops entirely, silently
+      losing that second candidate's contribution (e.g. a `Concept.summary` merge). Real integration/e2e tests
+      deliberately avoid tripping this (second passage only adds a `related_concepts` link, never re-declares
+      the same `Concept`) — this is a known gap, not yet exercised as a fixed regression. Needs the same
+      small-scale real-data validation as B-2 before deciding whether it's worth `SelectPages`-refreshing
+      mid-batch or loosening `Unseen Overwrite`'s check for this specific case.
 
 ## C. Test coverage gaps (ASSUMPTIONS.md §C)
 
@@ -208,6 +260,15 @@ field; and an empty `error_book.yaml` (no structural/content issues on this clea
 - [x] Tests for D22's `Merger` three-layer protection — `tests/unit/test_default_merger.py` (array union
       unaffected, locked `concept_title`, layer-2-skipped-without-`llm_client`) + `tests/integration/
       test_default_merger_llm.py` (LLM-merge-then-70%-rejection fallback path)
+- [x] Tests for D11's natural-paragraph splitter — `tests/unit/test_passage_splitter.py` (blank-line breaks,
+      multiple-blank-line collapsing, whitespace trimming, empty/whitespace-only input, no-blank-line input
+      stays one passage)
+- [x] Tests for D12's Phase 1 parallel / Phase 2 sequential execution — `tests/unit/test_orchestrator.py::
+      test_phase1_runs_passages_from_different_sources_concurrently` (deterministic 2-party-barrier proof of
+      real concurrency, not just structural separation) + `tests/e2e/test_compile_batch.py::
+      test_multi_paragraph_document_splits_into_passages_and_aggregates_across_them` (real `MarkdownWriter`:
+      per-passage `source_ref` anchoring, cross-passage `Concept.key_facts`/`Document.produced_claims`
+      accumulation, single `Document.summary` call after all passages of a document finish Phase 2)
 
 ## D. Known risks to watch during implementation
 
@@ -221,6 +282,10 @@ field; and an empty `error_book.yaml` (no structural/content issues on this clea
 - [ ] **B-7** — OKF spec has no pinned version and has grown richer across two independent lookups
       (2026-08-19, 2026-08-27); if it changes again, D6's conformance rules and D23's layered `index.md`
       design may need to follow. Re-check the spec once more right before implementation.
+- [ ] **B-2 extension (2026-08-29)** — with D12 Phase 1 parallelism actually implemented (§B3), same-batch
+      passages can produce a false-positive Unseen Overwrite when two of them touch the same page (the
+      second one's `SelectPages` ran before that page existed) — `CodeAutoFix` then silently drops that
+      candidate. See §B3's last bullet for the mechanism; needs the same real-data validation as B-2.
 
 ## D2. Known gap vs. the referenced Karpathy/LLM-Wiki methodology — **resolved by D21, superseded**
 
@@ -274,7 +339,6 @@ Per `SPEC.md` Minimal Scope — listed here so nobody "fixes" these as if they w
 - Multimodal/image understanding (no OCR/vision)
 - PDF → Raw Sources conversion
 - Fixed-length chunk extraction (vs. natural paragraph/concept units)
-- Fully-sequential execution as an alternative to Phase 1 parallel / Phase 2 sequential
 - Merging both domains into a single cross-domain bundle
 - Manual page-by-page content review, wikilink semantic review, user studies
 - `Writer` backends other than filesystem markdown

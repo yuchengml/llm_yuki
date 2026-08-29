@@ -3,12 +3,14 @@
 Independent of the OKF ``bundle/`` output — pipeline meta-state, not domain content, so it does not need to
 pass OKF conformance (proposal ARCHITECTURE.md §7.1). Every pipeline stage call records one event here,
 including non-LLM steps (e.g. ``CodeAutoFix``, ``StructuralValidate``), which explicitly record 0 tokens
-rather than being omitted (§7.2).
+rather than being omitted (§7.2). ``record`` is safe to call concurrently from multiple threads (D12 Phase 1
+runs several ``Extractor`` calls — and therefore several ``record`` calls — in parallel).
 """
 
 from __future__ import annotations
 
 import json
+import threading
 import time
 import uuid
 from datetime import UTC, datetime
@@ -39,6 +41,7 @@ class JsonlCostLedger:
         self._root = Path(pipeline_state_root)
         self._root.mkdir(parents=True, exist_ok=True)
         self._path = self._root / "cost_ledger.jsonl"
+        self._lock = threading.Lock()
 
     def record(
         self,
@@ -49,7 +52,7 @@ class JsonlCostLedger:
         wall_clock_ms: float,
         round: int | None = None,
     ) -> CostEvent:
-        """Append one cost event and return it."""
+        """Append one cost event and return it. Thread-safe (see module docstring)."""
         event = CostEvent(
             stage=stage,
             batch_id=batch_id,
@@ -58,7 +61,7 @@ class JsonlCostLedger:
             wall_clock_ms=wall_clock_ms,
             round=round,
         )
-        with self._path.open("a", encoding="utf-8") as f:
+        with self._lock, self._path.open("a", encoding="utf-8") as f:
             f.write(event.model_dump_json() + "\n")
         return event
 

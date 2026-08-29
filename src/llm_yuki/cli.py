@@ -47,6 +47,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory for pipeline-internal state (error_book.yaml, cost_ledger.jsonl). "
         "Defaults to a 'pipeline-state' sibling of bundle_dir.",
     )
+    compile_parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=4,
+        help="Max concurrent Phase 1 (SelectPages/CompileWikiPages) extraction calls (D12). Default: 4.",
+    )
 
     return parser
 
@@ -61,12 +67,16 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "compile":
         pipeline_state_dir = args.pipeline_state_dir or (args.bundle_dir.parent / "pipeline-state")
-        return _run_compile(args.source_dir, args.bundle_dir, pipeline_state_dir, args.batch_id)
+        return _run_compile(
+            args.source_dir, args.bundle_dir, pipeline_state_dir, args.batch_id, args.max_workers
+        )
 
     raise AssertionError(f"unhandled command: {args.command}")  # unreachable: argparse enforces required=True
 
 
-def _run_compile(source_dir: Path, bundle_dir: Path, pipeline_state_dir: Path, batch_id: int) -> int:
+def _run_compile(
+    source_dir: Path, bundle_dir: Path, pipeline_state_dir: Path, batch_id: int, max_workers: int
+) -> int:
     """Wire every pipeline stage into a real ``Orchestrator`` and run one batch."""
     try:
         llm_client = OpenAICompatibleClient.from_env()
@@ -88,6 +98,7 @@ def _run_compile(source_dir: Path, bundle_dir: Path, pipeline_state_dir: Path, b
         validator=DefaultValidator(llm_client, cost_ledger),
         fixer=DefaultFixer(llm_client, cost_ledger),
         error_book=error_book,
+        max_workers=max_workers,
     )
     orchestrator.run_batch(batch_id)
     error_book_store.save(error_book)
