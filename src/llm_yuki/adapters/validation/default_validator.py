@@ -244,10 +244,10 @@ class DefaultValidator(Validator):
 
     @staticmethod
     def _check_index_inconsistency(update: CompiledUpdate, writer: Writer) -> list[ValidationIssue]:
-        """Scoped to same-slug-different-type collisions (Claim/Concept/Document) — see module docstring.
+        """Scoped to same-slug-different-type collisions (Claim/Concept/Source) — see module docstring.
 
-        ``Document`` pages are never part of a ``CompiledUpdate`` (they're created deterministically by
-        ``Orchestrator``, not the LLM-backed Extractor, D21) — so a Document can only collide as an
+        ``Source`` pages are never part of a ``CompiledUpdate`` (they're created deterministically by
+        ``Orchestrator``, not the LLM-backed Extractor, D21) — so a Source can only collide as an
         *already-persisted* page a candidate Claim/Concept's slug happens to match, not within the update itself.
         """
         issues: list[ValidationIssue] = []
@@ -265,13 +265,13 @@ class DefaultValidator(Validator):
         for claim in update.claims:
             if writer.read_concept(claim.slug) is not None:
                 issues.append(_type_collision_issue(claim.slug, "Claim", "Concept"))
-            if writer.read_document(claim.slug) is not None:
-                issues.append(_type_collision_issue(claim.slug, "Claim", "Document"))
+            if writer.read_source(claim.slug) is not None:
+                issues.append(_type_collision_issue(claim.slug, "Claim", "Source"))
         for concept in update.concepts:
             if writer.read_claim(concept.slug) is not None:
                 issues.append(_type_collision_issue(concept.slug, "Concept", "Claim"))
-            if writer.read_document(concept.slug) is not None:
-                issues.append(_type_collision_issue(concept.slug, "Concept", "Document"))
+            if writer.read_source(concept.slug) is not None:
+                issues.append(_type_collision_issue(concept.slug, "Concept", "Source"))
         return issues
 
 

@@ -8,10 +8,10 @@ anything itself; deciding final content is this class's job, writing it is `Writ
 class DefaultMerger(Merger):
     def __init__(self, llm_client: OpenAICompatibleClient | None = None, cost_ledger: JsonlCostLedger | None = None) -> None: ...
     def merge(self, update: CompiledUpdate, writer: Writer, batch_id: int) -> CompiledUpdate: ...
-    def summarize_document(self, document_slug: str, claim_texts: list[str], writer: Writer, batch_id: int) -> str: ...
+    def summarize_source(self, source_slug: str, claim_texts: list[str], writer: Writer, batch_id: int) -> str: ...
 ```
 
-`llm_client=None` disables the two LLM-backed behaviors below (D22 layer 2, and `summarize_document`) without
+`llm_client=None` disables the two LLM-backed behaviors below (D22 layer 2, and `summarize_source`) without
 breaking `merge()` itself — see each section for exactly what degrades.
 
 ## Dedup: slug-exact, two passes
@@ -113,10 +113,10 @@ proposal's D22 also names `type` and `created` as locked fields; this codebase d
 domain fields — `type` lives only in OKF frontmatter, rendered by `Writer`, and there's no `created` field on
 `Concept` at all — so `concept_title` is the only field this layer actually applies to here.)
 
-## `Document.summary`: recursive batch-reduce (D21 §1.5)
+## `Source.summary`: recursive batch-reduce (D21 §1.5)
 
 ```python
-def summarize_document(self, document_slug: str, claim_texts: list[str], writer: Writer, batch_id: int) -> str:
+def summarize_source(self, source_slug: str, claim_texts: list[str], writer: Writer, batch_id: int) -> str:
     if not claim_texts:
         return ""
     if self._llm_client is None or self._cost_ledger is None:
@@ -128,9 +128,9 @@ Unlike `merge()`, this **does** require an `llm_client` (raises `RuntimeError` o
 with an empty `claim_texts` list from `Orchestrator` in a way that would matter, and when it is genuinely
 needed, there's no deterministic fallback that makes sense for "write a summary paragraph."
 
-Called once per document, after *every* passage of that document has been through Phase 2 — see
+Called once per source, after *every* passage of that source has been through Phase 2 — see
 `pipeline-overview.md` for exactly when and why. `claim_texts` is the full list of `claim_text` values for
-every `Claim` currently in that `Document`'s `produced_claims` backlink (re-read from `Writer`, not tracked
+every `Claim` currently in that `Source`'s `produced_claims` backlink (re-read from `Writer`, not tracked
 in-memory — see `core-types.md`).
 
 ### The algorithm
@@ -143,10 +143,10 @@ def _batch_reduce(self, texts: list[str], batch_id: int, round_number: int) -> s
     return self._batch_reduce(batch_summaries, batch_id, round_number + 1)
 ```
 
-- **Budget check**: `_fits_budget(texts)` is `sum(len(t) for t in texts) <= 6000` (`_DOCUMENT_BUDGET_CHARS`)
+- **Budget check**: `_fits_budget(texts)` is `sum(len(t) for t in texts) <= 6000` (`_SOURCE_BUDGET_CHARS`)
   — a fixed character count, not a token count, borrowed in spirit (not exact mechanism) from `llm_wiki`'s
   `context-budget.ts` fixed-ratio-quota approach. Not recalibrated against real corpus data.
-- **Fits**: one LLM call summarizes the whole list directly into the final `Document.summary`.
+- **Fits**: one LLM call summarizes the whole list directly into the final `Source.summary`.
 - **Doesn't fit**: `_split_into_batches` greedily groups `texts` into budget-sized chunks (preserving order),
   each chunk gets its own summarization call, and the *resulting summaries* become the new `texts` for a
   recursive call at `round_number + 1` — i.e. batch summaries get summarized again, recursively, until the
@@ -156,7 +156,7 @@ def _batch_reduce(self, texts: list[str], batch_id: int, round_number: int) -> s
   validated against real data).
 
 Every call — whether summarizing raw claim texts or batch summaries — goes through the same
-`_summarize_batch`, recording cost as stage `"Merger.summarize_document"` with a `round` field set to
+`_summarize_batch`, recording cost as stage `"Merger.summarize_source"` with a `round` field set to
 `round_number` (`0` for the first pass over raw claims, `1`+ for each subsequent reduction round). This is
 the one place in the codebase that uses `CostEvent.round` — see `cli-and-cost-ledger.md`.
 
@@ -165,7 +165,7 @@ the one place in the codebase that uses `CostEvent.round` — see `cli-and-cost-
 D22 also describes an LLM-based pass that would detect "these differently-named candidates are probably the
 same real-world entity" (modeled on `llm_wiki`'s `dedup.ts`) — this is a deliberate, permanent architecture
 placeholder, not a gap to fill in later by accident. `DefaultMerger`'s slug-exact dedup and the
-`summarize_document`/three-layer-merge methods above were written without assuming slugs are the only way two
+`summarize_source`/three-layer-merge methods above were written without assuming slugs are the only way two
 pages could refer to the same entity, so adding this later wouldn't require re-architecting `Merger`'s
 interface — but this POC ships without it, same treatment as the `deepagents` skill-swap extension point
 (both explicitly out of scope, see root `TODO.md`).

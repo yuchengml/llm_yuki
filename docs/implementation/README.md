@@ -13,10 +13,10 @@ the end-to-end flow, then drill into whichever stage you need.
 | File | Covers |
 |---|---|
 | [`pipeline-overview.md`](./pipeline-overview.md) | `Orchestrator.run_batch`, Algorithm 1, D12's Phase 1 (parallel) / Phase 2 (sequential) split, the periodic-fix cadence |
-| [`core-types.md`](./core-types.md) | `Claim` / `Concept` / `Document` — every field, what writes it, what reads it |
+| [`core-types.md`](./core-types.md) | `Claim` / `Concept` / `Source` — every field, what writes it, what reads it |
 | [`passage-splitting.md`](./passage-splitting.md) | D11's natural-paragraph splitter — the actual extraction unit |
 | [`extractor.md`](./extractor.md) | `LLMExtractor`: `SelectPages`/`CompileWikiPages`, prompts, JSON parsing |
-| [`merger.md`](./merger.md) | `DefaultMerger`: slug-exact dedupe, D22's three-layer `Concept` merge protection, D21's `Document.summary` recursive batch-reduce |
+| [`merger.md`](./merger.md) | `DefaultMerger`: slug-exact dedupe, D22's three-layer `Concept` merge protection, D21's `Source.summary` recursive batch-reduce |
 | [`validator.md`](./validator.md) | `DefaultValidator`: all 5 structural + 2 content error types, exactly what each check does |
 | [`error-book.md`](./error-book.md) | `ErrorBook`'s five-phase lifecycle, `log.md` audit-trail writes, YAML persistence |
 | [`writer.md`](./writer.md) | `MarkdownWriter`: bundle layout, body rendering, incremental backlink maintenance, D23's hierarchical `index.md` |
@@ -25,7 +25,7 @@ the end-to-end flow, then drill into whichever stage you need.
 ## Reading order for a first pass
 
 1. `pipeline-overview.md` — the shape of one `run_batch` call.
-2. `core-types.md` — what a `Claim`/`Concept`/`Document` actually is.
+2. `core-types.md` — what a `Claim`/`Concept`/`Source` actually is.
 3. `passage-splitting.md` → `extractor.md` — how a passage becomes candidate pages (Phase 1).
 4. `merger.md` → `validator.md` → `error-book.md` → `writer.md` — how a candidate becomes a persisted page,
    in the order Phase 2 actually calls them.

@@ -17,7 +17,7 @@ class Extractor(abc.ABC):
 
 class Merger(abc.ABC):
     def merge(self, update: CompiledUpdate, writer: Writer, batch_id: int) -> CompiledUpdate: ...
-    def summarize_document(self, document_slug: str, claim_texts: list[str], writer: Writer, batch_id: int) -> str: ...
+    def summarize_source(self, source_slug: str, claim_texts: list[str], writer: Writer, batch_id: int) -> str: ...
 
 class Validator(abc.ABC):
     def structural_validate(self, update: CompiledUpdate, selected: list[str], writer: Writer) -> list[ValidationIssue]: ...
@@ -47,15 +47,15 @@ inline below and in `error-book.md`).
 def run_batch(self, batch_id: int) -> None:
     constraints = self._error_book.active_constraints()
     passages = self._collect_passages()
-    document_slugs = _unique_in_order(passage.document_slug for passage in passages)
+    source_slugs = _unique_in_order(passage.source_slug for passage in passages)
 
     phase1_results = self._run_phase1(passages, constraints, batch_id)
-    self._ensure_document_pages(document_slugs)
+    self._ensure_source_pages(source_slugs)
 
     for result in phase1_results:
         self._run_phase2(result, batch_id)
 
-    self._finalize_document_summaries(document_slugs, batch_id)
+    self._finalize_source_summaries(source_slugs, batch_id)
 
     if self._error_book.periodic_fix_due(batch_id):
         self._fixer.llm_periodic_fix(self._error_book, self._writer, batch_id)
@@ -69,17 +69,17 @@ Six steps, always in this order:
    call this batch so the LLM doesn't repeat a previously-diagnosed mistake.
 2. **`_collect_passages()`** — reads every source via `Connector.list_sources()`/`read_source()`, splits each
    document's text into natural paragraphs (D11, see `passage-splitting.md`). Produces a flat list of
-   `_Passage(document_slug, index, text)` across *all* sources in the batch — a document with 3 paragraphs
+   `_Passage(source_slug, index, text)` across *all* sources in the batch — a document with 3 paragraphs
    contributes 3 entries; a batch with 2 documents of 2 paragraphs each contributes 4.
 3. **`_run_phase1(...)`** — D12 Phase 1, covered below.
-4. **`_ensure_document_pages(...)`** — creates a placeholder `Document` page (D21) for every distinct source
+4. **`_ensure_source_pages(...)`** — creates a placeholder `Source` page (D21) for every distinct source
    touched this batch, with an empty `summary`. Deliberately happens *after* Phase 1, not before — see
-   "Why Document creation waits" below.
+   "Why Source creation waits" below.
 5. **Phase 2 loop** — `_run_phase2(result, batch_id)` called once per `_Phase1Result`, in the same order
    `_collect_passages()` produced them (i.e. source order, then paragraph order within a source).
-6. **`_finalize_document_summaries(...)`** — after *every* passage in the batch has been through Phase 2 (not
-   interleaved with it), regenerates each touched document's `Document.summary` via
-   `Merger.summarize_document`. See `merger.md` for the recursive batch-reduce algorithm itself.
+6. **`_finalize_source_summaries(...)`** — after *every* passage in the batch has been through Phase 2 (not
+   interleaved with it), regenerates each touched source's `Source.summary` via
+   `Merger.summarize_source`. See `merger.md` for the recursive batch-reduce algorithm itself.
 7. **Periodic fix** — only if `error_book.periodic_fix_due(batch_id)` (every `periodic_fix_interval` batches,
    default 5, never twice for the same `batch_id`). Runs `Fixer.llm_periodic_fix` then
    `ErrorBook.verify_and_close` — both take the *whole* `ErrorBook`, not a single passage's issues, since this
@@ -132,17 +132,17 @@ def _extract_one(self, passage, constraints, batch_id) -> _Phase1Result:
   here. Real tests avoid tripping it (a second passage only *links to* an existing page via
   `related_concepts`, never re-declares the same `Concept`).
 
-### Why Document creation waits until after Phase 1
+### Why Source creation waits until after Phase 1
 
-`_ensure_document_pages` runs after `_run_phase1` returns, not before it and not per-passage. Two reasons:
+`_ensure_source_pages` runs after `_run_phase1` returns, not before it and not per-passage. Two reasons:
 
 1. **Correctness**: one document's passages are now spread across the whole batch's Phase 1/Phase 2 run
    (interleaved with other documents' passages) — there's no single "this passage's document" moment before
    Phase 2 where creating the page would be both early enough (before any `write_claim`, so backlink
    maintenance can attach) and late enough (after Phase 1, so it doesn't need to exist yet).
-2. **Efficiency**: if `Document` pages existed during Phase 1, they'd show up in `writer.list_pages()` and
+2. **Efficiency**: if `Source` pages existed during Phase 1, they'd show up in `writer.list_pages()` and
    get passed to `SelectPages` as "existing pages a passage might be relevant to" — but a freshly-created
-   Document has no `summary` yet and `LLMExtractor._describe_page` has no case for it, so it would just cost
+   Source has no `summary` yet and `LLMExtractor._describe_page` has no case for it, so it would just cost
    an LLM call for a page with nothing useful to say. Waiting until Phase 2 avoids this for free.
 
 ### Phase 2 — `_run_phase2`
@@ -161,7 +161,7 @@ def _run_phase2(self, result: _Phase1Result, batch_id: int) -> None:
         if structural_issues:
             update = self._fixer.code_auto_fix(update, structural_issues)
 
-    claims = _anchor_source_refs(update.claims, passage.document_slug, passage.index)
+    claims = _anchor_source_refs(update.claims, passage.source_slug, passage.index)
     self._apply_updates(CompiledUpdate(claims=claims, concepts=update.concepts))
 ```
 
@@ -178,7 +178,7 @@ passage:
    `error-book.md`), then `Fixer.code_auto_fix` if any were structural (drops/sanitizes problem candidates —
    see below).
 4. `_anchor_source_refs` — deterministically overwrites every surviving claim's `source_ref` to
-   `<document_slug>#p<passage_index>`, regardless of what the LLM put there. See "Deterministic overrides
+   `<source_slug>#p<passage_index>`, regardless of what the LLM put there. See "Deterministic overrides
    LLM" below.
 5. `_apply_updates` — the actual `Writer.write_concept`/`write_claim` calls. Concepts are written before
    claims: `write_claim`'s backlink maintenance looks up each `related_concepts` target and silently skips
@@ -201,8 +201,8 @@ Anything `code_auto_fix` can't safely resolve is left as-is; the `ErrorBookEntry
 ## "Deterministic overrides LLM" — `_anchor_source_refs`
 
 ```python
-def _anchor_source_refs(claims: list[Claim], document_slug: str, passage_index: int) -> list[Claim]:
-    new_ref = f"{document_slug}#p{passage_index}"
+def _anchor_source_refs(claims: list[Claim], source_slug: str, passage_index: int) -> list[Claim]:
+    new_ref = f"{source_slug}#p{passage_index}"
     return [
         claim if claim.source_ref == new_ref else claim.model_copy(update={"source_ref": new_ref})
         for claim in claims
@@ -214,8 +214,8 @@ The LLM has no reliable way to know the real source id or which natural paragrap
 knows both facts with certainty (they're structural — which source, which paragraph index — not something an
 LLM needs to infer), so it overwrites `source_ref` unconditionally after `code_auto_fix` runs (so
 `malformed_refs` lint still evaluates the LLM's *original* value first) and before `_apply_updates` (so
-`Writer`'s backlink maintenance, which parses the leading `<document_slug>` segment out of `source_ref` to
-find the owning `Document`, always gets an exact match). Same principle as D17 (body-link rendering)/D18
+`Writer`'s backlink maintenance, which parses the leading `<source_slug>` segment out of `source_ref` to
+find the owning `Source`, always gets an exact match). Same principle as D17 (body-link rendering)/D18
 (backlink maintenance)/D22 (locked `Concept` fields) — never let an LLM guess at something the code already
 knows for certain.
 

@@ -63,15 +63,15 @@ flowchart LR
   `Fixer.llm_periodic_fix`) are expected to call an OpenAI-compatible Chat Completions API — either via
   OpenRouter, or a self-hosted OpenAI-compatible server (e.g. vLLM, Ollama) — via the `openai` Python package
   with a configurable `base_url`/`api_key`, not a vendor-specific native SDK. See `TODO.md` §B.
-- **Core types** (`domain/entities.py`): `Claim` / `Concept` / `Document` — the three shared OKF
-  typed-frontmatter types every domain uses (D9, D21). `Document` is a per-Raw-Source navigation page
+- **Core types** (`domain/entities.py`): `Claim` / `Concept` / `Source` — the three shared OKF
+  typed-frontmatter types every domain uses (D9, D21). `Source` is a per-Raw-Source navigation page
   (`slug` = the source's id), distinct from `Claim.source_ref` (which still points *out* of the wiki to the
   Raw Source itself, D17) — see proposal `ARCHITECTURE.md` §1.5.
 
 ### 2.2 `llm_yuki.ports` — abstract interfaces
 
 - `Connector`: `list_sources()` / `read_source(ref)` — turns Raw Sources into passages/documents
-- `Writer`: persists `Claim`/`Concept`/`Document` pages, supports read-back, renders body links
+- `Writer`: persists `Claim`/`Concept`/`Source` pages, supports read-back, renders body links
   deterministically, maintains backlinks incrementally, and appends `log.md` audit-trail events
   (proposal `ARCHITECTURE.md` §2.3/§4.4)
 
@@ -80,13 +80,13 @@ flowchart LR
 - `adapters.connectors.txt_file_connector.TxtFileConnector`: default/first `Connector` (D10) — reads the
   "folder = document, txt + `images/`" Raw Source format, preserving image links without interpreting them
 - `adapters.writers.markdown_writer.MarkdownWriter`: default `Writer` — serializes `Claim`/`Concept`/
-  `Document` pages as OKF-conformant markdown with YAML frontmatter under `bundle/`, in per-type
-  subdirectories (`claims/`, `concepts/`, `documents/`) each with its own `index.md`, plus a root `index.md`
+  `Source` pages as OKF-conformant markdown with YAML frontmatter under `bundle/`, in per-type
+  subdirectories (`claims/`, `concepts/`, `sources/`) each with its own `index.md`, plus a root `index.md`
   linking to all three (D23)
 - `adapters.llm.extractor.LLMExtractor`: LLM-backed `Extractor` — `SelectPages`/`CompileWikiPages`
 - `adapters.merging.default_merger.DefaultMerger`: `Merger` — slug-exact dedupe; for `Concept` updates,
   three-layer merge protection (array union / LLM merge + 70%-length rejection / locked `concept_title`, D22);
-  also generates `Document.summary` via recursive batch-reduce over that document's Claims (D21 §1.5)
+  also generates `Source.summary` via recursive batch-reduce over that document's Claims (D21 §1.5)
 - `adapters.validation.default_validator.DefaultValidator`: `Validator` — deterministic structural checks
   (5 types) + LLM-backed content checks (2 types)
 - `adapters.fixing.default_fixer.DefaultFixer`: `Fixer` — deterministic auto-fix + LLM-backed periodic fix

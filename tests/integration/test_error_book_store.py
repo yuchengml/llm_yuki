@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from llm_yuki.adapters.state.error_book_store import YamlErrorBookStore
-from llm_yuki.domain.entities import Claim, Concept, Document
+from llm_yuki.domain.entities import Claim, Concept, Source
 from llm_yuki.domain.error_book import ErrorBook, ValidationIssue
 from llm_yuki.ports.writer import Writer
 
@@ -17,14 +17,14 @@ pytestmark = pytest.mark.integration
 class _FakeWriter(Writer):
     def write_claim(self, claim: Claim) -> None: ...
     def write_concept(self, concept: Concept) -> None: ...
-    def write_document(self, document: Document) -> None: ...
+    def write_source(self, source: Source) -> None: ...
     def read_claim(self, slug: str) -> Claim | None:
         return None
 
     def read_concept(self, slug: str) -> Concept | None:
         return None
 
-    def read_document(self, slug: str) -> Document | None:
+    def read_source(self, slug: str) -> Source | None:
         return None
 
     def list_pages(self) -> list[str]:

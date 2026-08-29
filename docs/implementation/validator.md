@@ -81,20 +81,20 @@ for slug in claim_slugs & concept_slugs:               # within this same update
     ...
 for claim in update.claims:
     if writer.read_concept(claim.slug) is not None: ... # Claim vs. already-persisted Concept
-    if writer.read_document(claim.slug) is not None: ... # Claim vs. already-persisted Document
+    if writer.read_source(claim.slug) is not None: ... # Claim vs. already-persisted Source
 for concept in update.concepts:
     if writer.read_claim(concept.slug) is not None: ...
-    if writer.read_document(concept.slug) is not None: ...
+    if writer.read_source(concept.slug) is not None: ...
 ```
 
-`Document` pages are never part of a `CompiledUpdate` (they're created deterministically by `Orchestrator`,
-never by the LLM-backed `Extractor` — see `core-types.md`), so a `Document` can only collide as an
+`Source` pages are never part of a `CompiledUpdate` (they're created deterministically by `Orchestrator`,
+never by the LLM-backed `Extractor` — see `core-types.md`), so a `Source` can only collide as an
 *already-persisted* page a candidate's slug happens to match, not within the update itself — there's no
-"Document vs Document in one update" case to check.
+"Source vs Source in one update" case to check.
 
 **Scope note**: the proposal's literal definition of Index Inconsistency (`ARCHITECTURE.md` §4.1 #5) is a full
 bidirectional diff between `index.md` and the filesystem — this codebase never implemented that; it was
-already scoped down to same-slug-different-type collision detection before `Document` existed, and D23's
+already scoped down to same-slug-different-type collision detection before `Source` existed, and D23's
 addition of a third type only extended that existing narrower scope. A true `index.md`-vs-filesystem diff
 remains unimplemented (pre-existing gap, not introduced by any recent change).
 

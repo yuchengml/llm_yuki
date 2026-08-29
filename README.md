@@ -30,17 +30,17 @@
 
 - 可插拔的 `Connector` 攝入端(預設實作:txt file connector,資料夾 = 文件,`txt` 正文 + `images/`)
 - 抽取粒度採**自然段落**單位(空行分段的預設切分器,`domain/passage_splitter.py`),不做固定長度 chunk 切割
-  (D11);產出共享核心型別 `Claim` / `Concept` / `Document`(OKF typed frontmatter)—— `Document` 是每份 Raw
+  (D11);產出共享核心型別 `Claim` / `Concept` / `Source`(OKF typed frontmatter)—— `Source` 是每份 Raw
   Source 專屬的導覽頁,`summary` 由遞迴 batch-reduce 生成,彙整該文件**所有段落**產出的 `Claim`(D21)
 - 執行策略分兩階段(D12):**Phase 1 平行**(`SelectPages`/`CompileWikiPages`,同批次每個段落各自比對同一份
   wiki index 快照,`ThreadPoolExecutor` 實作,worker 數可由 CLI `--max-workers` 調整)、**Phase 2 序列化**
   (`Merger`/`Validator`/`ErrorBook`/`Fixer`/寫入,依序執行避免並發寫入衝突)
 - `Merger` 三層合併保護:陣列欄位聯集(決定性)/ `Concept.summary` 衝突時 LLM 合併 + 70% 長度比例拒絕 / 鎖定
   欄位(`concept_title`)不受 LLM 輸出影響(D22)
-- 兩層 lint:OKF conformance(結構性,含跨 `Claim`/`Concept`/`Document` 的 slug 碰撞檢查)+ 自訂跨頁矛盾偵測
+- 兩層 lint:OKF conformance(結構性,含跨 `Claim`/`Concept`/`Source` 的 slug 碰撞檢查)+ 自訂跨頁矛盾偵測
   (內容性),走 Error Book 五階段生命週期,每次 Attribute/VerifyAndClose 都同步寫一筆事件進 `log.md`
-- `Writer` 決定性渲染 body 連結、增量維護 backlink(含 `Document.produced_claims`/`produced_concepts`),
-  避免 body/frontmatter 不一致;`index.md` 依核心型別分層(根目錄 + `claims/`/`concepts/`/`documents/` 三份
+- `Writer` 決定性渲染 body 連結、增量維護 backlink(含 `Source.produced_claims`/`produced_concepts`),
+  避免 body/frontmatter 不一致;`index.md` 依核心型別分層(根目錄 + `claims/`/`concepts/`/`sources/` 三份
   子目錄各自的 `index.md`,D23)
 - 成本統計(`cost_ledger.jsonl`),用於跟向量 RAG、`openwiki` 做量化對照
 
@@ -125,12 +125,12 @@ bundle/ (OKF-conformant markdown)
 
 `SPEC.md` is decided (2026-08-26), the repository is initialized per the AI-Native Repository Standard, the
 full compile pipeline (Algorithm 1) is implemented end to end and wired to a CLI, the proposal's D20–D23
-update (`Document` core type, `Merger`'s D22 merge mechanics, D23's hierarchical `index.md`) is implemented
+update (`Source` core type, `Merger`'s D22 merge mechanics, D23's hierarchical `index.md`) is implemented
 on top of it, and D11/D12 (natural-paragraph passage splitting, Phase 1 parallel / Phase 2 sequential
 execution — previously never actually built, despite being decided from the start) landed last:
 
-- **Core types**: `Claim`/`Concept`/`Document` — the three shared OKF typed-frontmatter core types
-  (`domain/entities.py`). `Document` is a per-Raw-Source navigation page (D21) — not a replacement for
+- **Core types**: `Claim`/`Concept`/`Source` — the three shared OKF typed-frontmatter core types
+  (`domain/entities.py`). `Source` is a per-Raw-Source navigation page (D21) — not a replacement for
   `Claim.source_ref`, which still points to the Raw Source itself (D17).
 - **`Connector`**: `TxtFileConnector` — reads Raw Sources from a `txt` + `images/` folder layout
   (`adapters/connectors/`)
@@ -138,24 +138,24 @@ execution — previously never actually built, despite being decided from the st
   splitter (D11), pure/no I/O; the real per-corpus splitting rule is still delegated to a future domain
   skill (D3) (`domain/passage_splitter.py`)
 - **`Writer`**: `MarkdownWriter` — writes OKF-conformant markdown under per-type `claims/`/`concepts/`/
-  `documents/` subdirectories (each with its own `index.md`, plus a root `index.md` linking to all three,
-  D23), renders body links deterministically, maintains backlinks (including `Document.produced_claims`/
+  `sources/` subdirectories (each with its own `index.md`, plus a root `index.md` linking to all three,
+  D23), renders body links deterministically, maintains backlinks (including `Source.produced_claims`/
   `produced_concepts`), and appends `log.md` audit-trail events (`adapters/writers/`)
 - **`Extractor`**: `LLMExtractor` — LLM-backed `SelectPages`/`CompileWikiPages` (`adapters/llm/extractor.py`)
 - **`Merger`**: `DefaultMerger` — deterministic slug-exact dedupe; three-layer merge protection for `Concept`
   updates (array union / LLM merge + 70%-length rejection / locked `concept_title`, D22); generates
-  `Document.summary` via recursive batch-reduce over that document's Claims (D21 §1.5) (`adapters/merging/`)
+  `Source.summary` via recursive batch-reduce over that document's Claims (D21 §1.5) (`adapters/merging/`)
 - **`Validator`**: `DefaultValidator` — deterministic structural checks (5 types, including slug collisions
   across all three core types) + LLM-backed content checks (2 types) (`adapters/validation/`)
 - **`Fixer`**: `DefaultFixer` — deterministic auto-fix + LLM-backed periodic fix (`adapters/fixing/`)
 - **`ErrorBook`**: full five-phase lifecycle + YAML persistence + `log.md` event writes on every
   Attribute/VerifyAndClose call (§4.4) (`domain/error_book.py`, `adapters/state/error_book_store.py`)
-- **Cost tracking**: `JsonlCostLedger` records every LLM call's token usage/latency, including `Document.summary`'s
+- **Cost tracking**: `JsonlCostLedger` records every LLM call's token usage/latency, including `Source.summary`'s
   batch-reduce rounds (`adapters/cost_ledger.py`)
 - **`Orchestrator`**: runs Algorithm 1 as D12's two phases — Phase 1 (`SelectPages`/`CompileWikiPages`) in
   parallel across every passage in the batch (`ThreadPoolExecutor`, `max_workers`), Phase 2 (`Merger`/
   `Validator`/`ErrorBook`/`Fixer`/writes) sequentially per passage to avoid concurrent write conflicts;
-  creates each source's `Document` page once Phase 1 is done, and finalizes its `summary` once every one of
+  creates each source's `Source` page once Phase 1 is done, and finalizes its `summary` once every one of
   that document's passages has gone through Phase 2; deterministically anchors every compiled
   `Claim.source_ref` to `<source id>#p<passage index>` so `Writer` backlink maintenance can find it
   (`domain/pipeline.py`)

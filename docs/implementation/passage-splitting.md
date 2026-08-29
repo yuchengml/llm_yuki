@@ -51,11 +51,11 @@ def _collect_passages(self) -> list[_Passage]:
     for ref in self._connector.list_sources():
         document = self._connector.read_source(ref)
         for index, text in enumerate(split_into_natural_paragraphs(document.text)):
-            passages.append(_Passage(document_slug=ref.id, index=index, text=text))
+            passages.append(_Passage(source_slug=ref.id, index=index, text=text))
     return passages
 ```
 
-Each resulting passage carries `document_slug` (the owning source's id) and `index` (its position among that
+Each resulting passage carries `source_slug` (the owning source's id) and `index` (its position among that
 source's paragraphs, `0`-based) — both are needed later to anchor `Claim.source_ref` deterministically (see
 `pipeline-overview.md`'s "Deterministic overrides LLM" section) and to route the passage through D12's Phase
 1/Phase 2 split correctly.

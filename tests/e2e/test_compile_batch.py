@@ -83,7 +83,7 @@ class _ScriptedLLMClient:
             return LLMResponse(content=json.dumps({"issues": []}), tokens_in=10, tokens_out=2)
         if "LLMPeriodicFix" in system:
             return LLMResponse(content=json.dumps({"claims": [], "concepts": []}), tokens_in=1, tokens_out=1)
-        if "Document.summary generation" in system:
+        if "Source.summary generation" in system:
             return LLMResponse(content="Doc 1 covers water boiling at sea level.", tokens_in=8, tokens_out=6)
         raise AssertionError(f"unexpected system prompt: {system[:80]!r}")
 
@@ -125,21 +125,21 @@ def test_full_pipeline_compiles_one_batch_and_maintains_backlinks(tmp_path: Path
     assert "## Related Pages" in body
     assert "- [[water]]" in body
 
-    document = writer.read_document("doc-1")
-    assert document is not None
-    assert document.summary == "Doc 1 covers water boiling at sea level."
-    assert document.produced_claims == ["water-boils"]  # backlink maintained by Writer (D21), not the LLM
-    assert document.produced_concepts == ["water"]
+    source = writer.read_source("doc-1")
+    assert source is not None
+    assert source.summary == "Doc 1 covers water boiling at sea level."
+    assert source.produced_claims == ["water-boils"]  # backlink maintained by Writer (D21), not the LLM
+    assert source.produced_concepts == ["water"]
 
     # Extractor.SelectPages is skipped (no cost event) when there are no existing pages to select from yet
     # — LLMExtractor.select_pages returns [] without calling the LLM in that case.
     stages = {event.stage for event in cost_ledger.read_events()}
-    assert stages == {"Extractor.CompileWikiPages", "Validator.ContentValidate", "Merger.summarize_document"}
+    assert stages == {"Extractor.CompileWikiPages", "Validator.ContentValidate", "Merger.summarize_source"}
 
 
 def test_multi_paragraph_document_splits_into_passages_and_aggregates_across_them(tmp_path: Path) -> None:
     """D11 + D12: a document with a blank-line paragraph break becomes two passages, Phase 1 extracts both
-    in parallel, Phase 2 applies both sequentially, and Document.summary/produced_claims/Concept.key_facts
+    in parallel, Phase 2 applies both sequentially, and Source.summary/produced_claims/Concept.key_facts
     all aggregate across both — not just the last one processed."""
     source_dir = tmp_path / "raw_sources"
     doc_dir = source_dir / "doc-1"
@@ -169,7 +169,7 @@ def test_multi_paragraph_document_splits_into_passages_and_aggregates_across_the
     boils = writer.read_claim("water-boils")
     freezes = writer.read_claim("water-freezes")
     assert boils is not None and freezes is not None
-    # D11 §1.2: source_ref anchored to <document_slug>#p<passage_index> — one per natural paragraph.
+    # D11 §1.2: source_ref anchored to <source_slug>#p<passage_index> — one per natural paragraph.
     assert boils.source_ref == "doc-1#p0"
     assert freezes.source_ref == "doc-1#p1"
 
@@ -178,13 +178,13 @@ def test_multi_paragraph_document_splits_into_passages_and_aggregates_across_the
     # Both passages' Claims backlink onto the same Concept — accumulated, not overwritten by the second.
     assert concept.key_facts == ["water-boils", "water-freezes"]
 
-    document = writer.read_document("doc-1")
-    assert document is not None
-    assert document.produced_claims == ["water-boils", "water-freezes"]
-    assert document.produced_concepts == ["water"]
-    # Document.summary is generated once, after both passages have gone through Phase 2 — not per-passage.
-    assert document.summary == "Doc 1 covers water boiling at sea level."
-    summarize_events = [e for e in cost_ledger.read_events() if e.stage == "Merger.summarize_document"]
+    source = writer.read_source("doc-1")
+    assert source is not None
+    assert source.produced_claims == ["water-boils", "water-freezes"]
+    assert source.produced_concepts == ["water"]
+    # Source.summary is generated once, after both passages have gone through Phase 2 — not per-passage.
+    assert source.summary == "Doc 1 covers water boiling at sea level."
+    summarize_events = [e for e in cost_ledger.read_events() if e.stage == "Merger.summarize_source"]
     assert len(summarize_events) == 1
 
     compile_events = [e for e in cost_ledger.read_events() if e.stage == "Extractor.CompileWikiPages"]

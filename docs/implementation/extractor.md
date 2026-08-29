@@ -33,11 +33,11 @@ def select_pages(self, passage: str, writer: Writer, batch_id: int) -> list[str]
   bundle has nothing to select from, so there's no point spending a call. This is why an e2e test with an
   empty bundle asserts `"Extractor.SelectPages"` never appears in `cost_ledger.jsonl`.
 - Every known page gets a one-line description via `_describe_page`, which only knows how to describe a
-  `Concept` (`summary` or `concept_title` as fallback) or a `Claim` (`claim_text`) — a `Document` page falls
-  through to `"(no description available)"`. In practice this rarely matters: `Document` pages are only ever
+  `Concept` (`summary` or `concept_title` as fallback) or a `Claim` (`claim_text`) — a `Source` page falls
+  through to `"(no description available)"`. In practice this rarely matters: `Source` pages are only ever
   created *after* Phase 1 finishes for a batch (see `pipeline-overview.md`), so they're never in
   `writer.list_pages()` at `select_pages` time for a fresh bundle's first batch — though on a later batch
-  against an already-populated bundle, an existing `Document` from a previous ingest could show up here with
+  against an already-populated bundle, an existing `Source` from a previous ingest could show up here with
   an unhelpful description.
 - The LLM's response is parsed as `{"selected": [...]}`; the result is filtered against `known_slugs` so a
   hallucinated slug can never leak into `selected` — `compile_wiki_pages` and `structural_validate`'s Unseen

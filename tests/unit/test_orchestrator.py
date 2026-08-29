@@ -10,11 +10,10 @@ import threading
 
 import pytest
 
-from llm_yuki.domain.entities import Claim, Concept, Document
+from llm_yuki.domain.entities import Claim, Concept, Source
 from llm_yuki.domain.error_book import ErrorBook, ValidationIssue
 from llm_yuki.domain.pipeline import CompiledUpdate, Extractor, Fixer, Merger, Orchestrator, Validator
-from llm_yuki.ports.connector import Connector, SourceRef
-from llm_yuki.ports.connector import Document as SourceDocument
+from llm_yuki.ports.connector import Connector, Document, SourceRef
 from llm_yuki.ports.writer import Writer
 
 pytestmark = pytest.mark.unit
@@ -27,15 +26,15 @@ class _FakeConnector(Connector):
     def list_sources(self) -> list[SourceRef]:
         return [SourceRef(id=doc_id) for doc_id in self._documents]
 
-    def read_source(self, ref: SourceRef) -> SourceDocument:
-        return SourceDocument(ref=ref, text=self._documents[ref.id])
+    def read_source(self, ref: SourceRef) -> Document:
+        return Document(ref=ref, text=self._documents[ref.id])
 
 
 class _FakeWriter(Writer):
     def __init__(self) -> None:
         self.written_claims: list[Claim] = []
         self.written_concepts: list[Concept] = []
-        self.written_documents: list[Document] = []
+        self.written_sources: list[Source] = []
         self.log_events: list[str] = []
 
     def write_claim(self, claim: Claim) -> None:
@@ -44,8 +43,8 @@ class _FakeWriter(Writer):
     def write_concept(self, concept: Concept) -> None:
         self.written_concepts.append(concept)
 
-    def write_document(self, document: Document) -> None:
-        self.written_documents.append(document)
+    def write_source(self, source: Source) -> None:
+        self.written_sources.append(source)
 
     def read_claim(self, slug: str) -> Claim | None:
         return next((c for c in self.written_claims if c.slug == slug), None)
@@ -53,14 +52,14 @@ class _FakeWriter(Writer):
     def read_concept(self, slug: str) -> Concept | None:
         return next((c for c in self.written_concepts if c.slug == slug), None)
 
-    def read_document(self, slug: str) -> Document | None:
-        return next((d for d in self.written_documents if d.slug == slug), None)
+    def read_source(self, slug: str) -> Source | None:
+        return next((s for s in self.written_sources if s.slug == slug), None)
 
     def list_pages(self) -> list[str]:
         return (
             [c.slug for c in self.written_claims]
             + [c.slug for c in self.written_concepts]
-            + [d.slug for d in self.written_documents]
+            + [s.slug for s in self.written_sources]
         )
 
     def append_log(self, event: str) -> None:
@@ -92,7 +91,7 @@ class _PassthroughMerger(Merger):
     def merge(self, update: CompiledUpdate, writer: Writer, batch_id: int) -> CompiledUpdate:
         return update
 
-    def summarize_document(self, document_slug: str, claim_texts: list[str], writer: Writer, batch_id: int) -> str:
+    def summarize_source(self, source_slug: str, claim_texts: list[str], writer: Writer, batch_id: int) -> str:
         return " ".join(claim_texts)
 
 
@@ -139,10 +138,10 @@ def test_run_batch_applies_updates_for_every_source() -> None:
     assert len(writer.written_claims) == 2
     assert len(writer.written_concepts) == 2
     assert {c.claim_text for c in writer.written_claims} == {"hello", "world"}
-    assert {d.slug for d in writer.written_documents} == {"doc-a", "doc-b"}
-    # source_ref is anchored to <document_slug>#p<passage_index>, overriding _FakeExtractor's hardcoded
+    assert {s.slug for s in writer.written_sources} == {"doc-a", "doc-b"}
+    # source_ref is anchored to <source_slug>#p<passage_index>, overriding _FakeExtractor's hardcoded
     # "doc-1" (D17/D18/D22 "deterministic overrides LLM" — see Orchestrator._anchor_source_refs). Each
-    # document here is a single natural paragraph (no blank lines), so passage index is always 0.
+    # source here is a single natural paragraph (no blank lines), so passage index is always 0.
     assert {c.source_ref for c in writer.written_claims} == {"doc-a#p0", "doc-b#p0"}
 
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from llm_yuki.adapters.merging.default_merger import DefaultMerger
-from llm_yuki.domain.entities import Claim, Concept, ContradictionRef, Document
+from llm_yuki.domain.entities import Claim, Concept, ContradictionRef, Source
 from llm_yuki.domain.pipeline import CompiledUpdate
 from llm_yuki.ports.writer import Writer
 
@@ -16,7 +16,7 @@ class _FakeWriter(Writer):
     def __init__(self) -> None:
         self.claims: dict[str, Claim] = {}
         self.concepts: dict[str, Concept] = {}
-        self.documents: dict[str, Document] = {}
+        self.sources: dict[str, Source] = {}
         self.log_events: list[str] = []
 
     def write_claim(self, claim: Claim) -> None:
@@ -25,8 +25,8 @@ class _FakeWriter(Writer):
     def write_concept(self, concept: Concept) -> None:
         self.concepts[concept.slug] = concept
 
-    def write_document(self, document: Document) -> None:
-        self.documents[document.slug] = document
+    def write_source(self, source: Source) -> None:
+        self.sources[source.slug] = source
 
     def read_claim(self, slug: str) -> Claim | None:
         return self.claims.get(slug)
@@ -34,11 +34,11 @@ class _FakeWriter(Writer):
     def read_concept(self, slug: str) -> Concept | None:
         return self.concepts.get(slug)
 
-    def read_document(self, slug: str) -> Document | None:
-        return self.documents.get(slug)
+    def read_source(self, slug: str) -> Source | None:
+        return self.sources.get(slug)
 
     def list_pages(self) -> list[str]:
-        return [*self.claims, *self.concepts, *self.documents]
+        return [*self.claims, *self.concepts, *self.sources]
 
     def append_log(self, event: str) -> None:
         self.log_events.append(event)
@@ -160,13 +160,13 @@ def test_merge_concept_without_llm_client_skips_layer_2_even_on_real_conflict() 
     assert merged.concepts[0].summary == "Water freezes at 0 degrees Celsius."
 
 
-def test_summarize_document_with_no_claims_returns_empty_string_even_without_llm_client() -> None:
+def test_summarize_source_with_no_claims_returns_empty_string_even_without_llm_client() -> None:
     """No claims means nothing was extracted for this source — never worth an LLM call either way."""
-    summary = DefaultMerger().summarize_document("doc-1", [], _FakeWriter(), batch_id=1)
+    summary = DefaultMerger().summarize_source("doc-1", [], _FakeWriter(), batch_id=1)
 
     assert summary == ""
 
 
-def test_summarize_document_without_llm_client_raises_runtime_error() -> None:
+def test_summarize_source_without_llm_client_raises_runtime_error() -> None:
     with pytest.raises(RuntimeError):
-        DefaultMerger().summarize_document("doc-1", ["Water boils at 100C."], _FakeWriter(), batch_id=1)
+        DefaultMerger().summarize_source("doc-1", ["Water boils at 100C."], _FakeWriter(), batch_id=1)

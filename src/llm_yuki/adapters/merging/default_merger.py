@@ -15,8 +15,8 @@ an LLM judgment call and is out of scope for this deterministic baseline (see ``
   3. Locked fields (always): ``concept_title`` never changes on merge, regardless of what layers 1-2 produce —
      same "deterministic overrides LLM" principle as D17/D18.
 
-``Document.summary`` generation (D21 §1.5) is this class's other LLM-backed responsibility ("延伸職責,不是新
-模組" — an extension of Merger's job, not a new module): a recursive batch-reduce over a document's
+``Source.summary`` generation (D21 §1.5) is this class's other LLM-backed responsibility ("延伸職責,不是新
+模組" — an extension of Merger's job, not a new module): a recursive batch-reduce over a source's
 ``Claim.claim_text``s, budgeted by a fixed character quota borrowed in spirit from ``llm_wiki``'s
 ``context-budget.ts``. Fits in one call: summarize directly. Doesn't fit: split into budget-sized batches,
 summarize each, then recurse on the batch summaries until they fit — deliberately no round cap (ASSUMPTIONS.md
@@ -41,12 +41,12 @@ Concept page and a new candidate summary describing the same Concept, drawn from
 Merge them into a single, coherent one-paragraph summary that preserves every distinct fact from both — do \
 not drop information from either side. Respond with the merged summary text only, no extra commentary."""
 
-_DOCUMENT_BUDGET_CHARS = 6000
+_SOURCE_BUDGET_CHARS = 6000
 """Fixed-ratio quota per batch-reduce call — spirit borrowed from ``llm_wiki``'s ``context-budget.ts`` (D21),
 not a token-accurate count. Not recalibrated against real corpus data (ASSUMPTIONS.md B-5)."""
 
-_SUMMARIZE_DOCUMENT_SYSTEM_PROMPT = """\
-You are the Document.summary generation step of a wiki-compilation pipeline (recursive batch-reduce). You are \
+_SUMMARIZE_SOURCE_SYSTEM_PROMPT = """\
+You are the Source.summary generation step of a wiki-compilation pipeline (recursive batch-reduce). You are \
 given a list of facts about one source document — either its extracted Claims, or summaries produced by an \
 earlier reduction round over batches of those Claims. Write a single coherent one-paragraph summary that \
 captures every distinct fact from the list. Respond with the summary text only, no extra commentary."""
@@ -154,19 +154,19 @@ class DefaultMerger(Merger):
         )
         return response.content.strip()
 
-    def summarize_document(self, document_slug: str, claim_texts: list[str], writer: Writer, batch_id: int) -> str:
+    def summarize_source(self, source_slug: str, claim_texts: list[str], writer: Writer, batch_id: int) -> str:
         """D21 §1.5: recursive batch-reduce over ``claim_texts``, see module docstring."""
         if not claim_texts:
             return ""
         if self._llm_client is None or self._cost_ledger is None:
             raise RuntimeError(
-                "DefaultMerger.summarize_document requires llm_client and cost_ledger "
+                "DefaultMerger.summarize_source requires llm_client and cost_ledger "
                 "(see ARCHITECTURE.md §1.5, TODO.md §B)"
             )
         return self._batch_reduce(claim_texts, batch_id, round_number=0)
 
     def _batch_reduce(self, texts: list[str], batch_id: int, round_number: int) -> str:
-        assert self._llm_client is not None and self._cost_ledger is not None  # checked by summarize_document
+        assert self._llm_client is not None and self._cost_ledger is not None  # checked by summarize_source
         if len(texts) == 1 or _fits_budget(texts):
             return self._summarize_batch(texts, batch_id, round_number)
 
@@ -174,18 +174,18 @@ class DefaultMerger(Merger):
         return self._batch_reduce(batch_summaries, batch_id, round_number + 1)
 
     def _summarize_batch(self, texts: list[str], batch_id: int, round_number: int) -> str:
-        assert self._llm_client is not None and self._cost_ledger is not None  # checked by summarize_document
+        assert self._llm_client is not None and self._cost_ledger is not None  # checked by summarize_source
         user_prompt = "Facts:\n" + "\n".join(f"- {text}" for text in texts)
         start = time.monotonic()
         response = self._llm_client.complete(
             [
-                {"role": "system", "content": _SUMMARIZE_DOCUMENT_SYSTEM_PROMPT},
+                {"role": "system", "content": _SUMMARIZE_SOURCE_SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ]
         )
         wall_clock_ms = (time.monotonic() - start) * 1000
         self._cost_ledger.record(
-            "Merger.summarize_document",
+            "Merger.summarize_source",
             batch_id,
             tokens_in=response.tokens_in,
             tokens_out=response.tokens_out,
@@ -196,7 +196,7 @@ class DefaultMerger(Merger):
 
 
 def _fits_budget(texts: list[str]) -> bool:
-    return sum(len(text) for text in texts) <= _DOCUMENT_BUDGET_CHARS
+    return sum(len(text) for text in texts) <= _SOURCE_BUDGET_CHARS
 
 
 def _split_into_batches(texts: list[str]) -> list[list[str]]:
@@ -205,7 +205,7 @@ def _split_into_batches(texts: list[str]) -> list[list[str]]:
     current: list[str] = []
     current_len = 0
     for text in texts:
-        if current and current_len + len(text) > _DOCUMENT_BUDGET_CHARS:
+        if current and current_len + len(text) > _SOURCE_BUDGET_CHARS:
             batches.append(current)
             current = []
             current_len = 0

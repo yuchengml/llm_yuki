@@ -39,7 +39,7 @@ _ROOT_CAUSE_TEMPLATES: dict[ErrorType, str] = {
     "incomplete_pages": "A page is missing required content (claim_text/source_ref, or concept_title/summary).",
     "malformed_refs": "A source_ref does not match the expected reference shape (see structural_checks).",
     "unseen_overwrite": "CompileWikiPages modified a page outside this passage's SelectPages selection.",
-    "index_inconsistency": "The same slug was used for two different core-type pages (Claim/Concept/Document).",
+    "index_inconsistency": "The same slug was used for two different core-type pages (Claim/Concept/Source).",
     "unsupported_facts": "A Claim's claim_text is not grounded in the source_ref it cites.",
     "cross_page_contradictions": "Related pages assert mutually inconsistent facts.",
 }

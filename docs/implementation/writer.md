@@ -2,7 +2,7 @@
 
 Module: `adapters/writers/markdown_writer.py::MarkdownWriter`, implementing `ports/writer.py::Writer` — the
 only `Writer` backend implemented/validated in this POC (D16 explicitly scopes out alternatives; see
-`domain/pipeline.py`'s "Out of scope" note in `TODO.md`). Persists `Claim`/`Concept`/`Document` pages as
+`domain/pipeline.py`'s "Out of scope" note in `TODO.md`). Persists `Claim`/`Concept`/`Source` pages as
 OKF-style markdown with YAML frontmatter, and is the *only* place allowed to write into `bundle/` — every
 other module reaches the bundle only through this interface (AGENTS.md §4).
 
@@ -10,10 +10,10 @@ other module reaches the bundle only through this interface (AGENTS.md §4).
 class Writer(abc.ABC):
     def write_claim(self, claim: Claim) -> None: ...
     def write_concept(self, concept: Concept) -> None: ...
-    def write_document(self, document: Document) -> None: ...
+    def write_source(self, source: Source) -> None: ...
     def read_claim(self, slug: str) -> Claim | None: ...
     def read_concept(self, slug: str) -> Concept | None: ...
-    def read_document(self, slug: str) -> Document | None: ...
+    def read_source(self, slug: str) -> Source | None: ...
     def list_pages(self) -> list[str]: ...
     def append_log(self, event: str) -> None: ...
 ```
@@ -30,14 +30,14 @@ class Writer(abc.ABC):
     concepts/
         index.md
         <slug>.md ...
-    documents/
+    sources/
         index.md
         <slug>.md ...
 ```
 
 Every type gets its own subdirectory with its own `index.md`; the root `index.md` only links to the three
 subdirectory indices — it doesn't list individual pages itself (OKF's "progressive disclosure" principle).
-`bundle_root`'s `claims/`/`concepts/`/`documents/` directories and `log.md` are all created/initialized at
+`bundle_root`'s `claims/`/`concepts/`/`sources/` directories and `log.md` are all created/initialized at
 `MarkdownWriter.__init__` time, so a fresh bundle always has the full skeleton even before anything is
 written.
 
@@ -70,7 +70,7 @@ Water boils at 100C at sea level.
 
 `type` is injected as the first frontmatter key (not a field on the Pydantic models themselves) —
 `{"type": "Claim", **claim.model_dump(mode="json")}` — matching OKF's typed-frontmatter requirement.
-`read_claim`/`read_concept`/`read_document` parse the frontmatter block back out with `yaml.safe_load` and
+`read_claim`/`read_concept`/`read_source` parse the frontmatter block back out with `yaml.safe_load` and
 reconstruct the model via `Model.model_validate(frontmatter)`; a missing file returns `None`, never raises.
 
 ## Body rendering — deterministic, never LLM-generated
@@ -86,7 +86,7 @@ list is empty — e.g. a `Claim` with no `related_concepts` gets no `## Related 
 |---|---|
 | `Claim` | title, `claim_text`, `## Related Pages` (from `related_concepts`, if any), `## Related Sources` (from `source_ref`, if non-empty) |
 | `Concept` | title, `summary`, `## Key Facts` (from `key_facts`), `## Related Pages` (from `related_pages`), `## Related Sources` (from `related_sources`) |
-| `Document` | title, `summary`, `## Produced Claims`, `## Produced Concepts`, `## Related Pages`, `## Source` (always rendered — `source_path`) |
+| `Source` | title, `summary`, `## Produced Claims`, `## Produced Concepts`, `## Related Pages`, `## Source` (always rendered — `source_path`) |
 
 ## Incremental backlink maintenance (§2.3.2, D18/D21)
 
@@ -110,7 +110,7 @@ def _maintain_claim_backlinks(self, claim: Claim) -> None:
             other.contradicted_by.append(ContradictionRef(slug=claim.slug, reason=ref.reason))
             self._write_claim_file(other)
 
-    self._maintain_document_backlinks(claim)
+    self._maintain_source_backlinks(claim)
 ```
 
 Three backlinks maintained, all incrementally, all on every `write_claim`:
@@ -121,41 +121,41 @@ Three backlinks maintained, all incrementally, all on every `write_claim`:
 2. **Symmetric `Claim.contradicted_by`**: if claim A lists claim B in `contradicted_by`, and B already
    exists, B gets a matching entry pointing back at A (same `reason`) — so the contradiction shows up on
    *both* pages, not just the one that happened to declare it first.
-3. **`Document.produced_claims`/`produced_concepts`** — via `_maintain_document_backlinks`:
+3. **`Source.produced_claims`/`produced_concepts`** — via `_maintain_source_backlinks`:
 
 ```python
-def _maintain_document_backlinks(self, claim: Claim) -> None:
-    document_slug = claim.source_ref.split("#", 1)[0]
-    document = self.read_document(document_slug)
-    if document is None:
+def _maintain_source_backlinks(self, claim: Claim) -> None:
+    source_slug = claim.source_ref.split("#", 1)[0]
+    source = self.read_source(source_slug)
+    if source is None:
         return
-    if claim.slug not in document.produced_claims:
-        document.produced_claims.append(claim.slug)
+    if claim.slug not in source.produced_claims:
+        source.produced_claims.append(claim.slug)
     for concept_slug in claim.related_concepts:
-        if concept_slug not in document.produced_concepts:
-            document.produced_concepts.append(concept_slug)
-    ...  # write_document_file only if something actually changed
+        if concept_slug not in source.produced_concepts:
+            source.produced_concepts.append(concept_slug)
+    ...  # write_source_file only if something actually changed
 ```
 
-The owning `Document` is identified purely by parsing `claim.source_ref`'s leading segment before an
+The owning `Source` is identified purely by parsing `claim.source_ref`'s leading segment before an
 optional `#` — the exact convention `Orchestrator._anchor_source_refs` guarantees every persisted claim's
-`source_ref` follows (`<document_slug>#p<passage_index>`, see `pipeline-overview.md`). If that `Document`
+`source_ref` follows (`<source_slug>#p<passage_index>`, see `pipeline-overview.md`). If that `Source`
 hasn't been written yet, this is treated the same as an unresolved `related_concepts` target: silently
 skipped, not this `Writer`'s job to fix (in practice this never happens in the current `Orchestrator` flow,
-since `_ensure_document_pages` always runs before any Phase 2 write — see `pipeline-overview.md`).
+since `_ensure_source_pages` always runs before any Phase 2 write — see `pipeline-overview.md`).
 
-`write_concept` and `write_document` do **not** trigger any backlink maintenance of their own — only
+`write_concept` and `write_source` do **not** trigger any backlink maintenance of their own — only
 `write_claim` does, since claims are the only type that *points at* the other two.
 
 ## Hierarchical `index.md` (D23)
 
-Regenerated in full on **every** `write_claim`/`write_concept`/`write_document` call, via `_regenerate_index`:
+Regenerated in full on **every** `write_claim`/`write_concept`/`write_source` call, via `_regenerate_index`:
 
 ```python
 def _regenerate_index(self) -> None:
     self._write_type_index(_CLAIMS_DIR, "Claims", self._claim_index_entries())
     self._write_type_index(_CONCEPTS_DIR, "Concepts", self._concept_index_entries())
-    self._write_type_index(_DOCUMENTS_DIR, "Documents", self._document_index_entries())
+    self._write_type_index(_SOURCES_DIR, "Sources", self._source_index_entries())
     self._write_root_index()
 ```
 
@@ -170,9 +170,9 @@ sourced from a specific field per type — never separately generated:
 |---|---|
 | `Claim` | `claim_text` itself (no separate summary field exists) |
 | `Concept` | `f"{concept_title}: {summary}"` |
-| `Document` | `f"{document_title}: {summary}"` |
+| `Source` | `f"{source_title}: {summary}"` |
 
-The root `index.md` is a fixed three-block template — `# Claims` / `# Concepts` / `# Documents`, each linking
+The root `index.md` is a fixed three-block template — `# Claims` / `# Concepts` / `# Sources`, each linking
 to that subdirectory's `index.md` — it never lists individual pages itself, matching OKF's progressive
 disclosure principle. No nesting deeper than the type level (an explicit scope limit — OKF allows deeper
 nesting, this POC doesn't need it).
@@ -181,7 +181,7 @@ nesting, this POC doesn't need it).
 
 ```python
 def list_pages(self) -> list[str]:
-    return sorted(self._page_slugs(_CLAIMS_DIR) + self._page_slugs(_CONCEPTS_DIR) + self._page_slugs(_DOCUMENTS_DIR))
+    return sorted(self._page_slugs(_CLAIMS_DIR) + self._page_slugs(_CONCEPTS_DIR) + self._page_slugs(_SOURCES_DIR))
 ```
 
 A single flat, alphabetically-sorted list of every slug across all three types — this is what

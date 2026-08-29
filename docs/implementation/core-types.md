@@ -1,6 +1,6 @@
 # Core Types
 
-Module: `domain/entities.py`. Three Pydantic `BaseModel`s — `Claim`, `Concept`, `Document` — plus a small
+Module: `domain/entities.py`. Three Pydantic `BaseModel`s — `Claim`, `Concept`, `Source` — plus a small
 `ContradictionRef` helper type. These are the only page types the core pipeline understands; a per-corpus
 skill may add its own extension types on top (e.g. `sci-paper:Paper`), but nothing in `domain/`, `ports/`, or
 the default `adapters/` implementations knows about anything beyond these three.
@@ -27,8 +27,8 @@ A sourced, extracted/inferred assertion — the smallest unit the contradiction-
 | Field | Meaning | Written by | Read by |
 |---|---|---|---|
 | `slug` | Unique page identifier | `LLMExtractor` (LLM output) | Everything that links to it |
-| `claim_text` | A structured assertion — **not** a verbatim copy of the source passage | LLM, or `DefaultMerger._merge_claim_pair` (`new or old` on merge) | `Merger.summarize_document` input, `content_validate` prompt, `claims/index.md` description |
-| `source_ref` | Pointer into the Raw Source | LLM *initially*, then **unconditionally overwritten** by `Orchestrator._anchor_source_refs` to `<document_slug>#p<passage_index>` | `Writer._maintain_document_backlinks` (parses the leading segment to find the owning `Document`) |
+| `claim_text` | A structured assertion — **not** a verbatim copy of the source passage | LLM, or `DefaultMerger._merge_claim_pair` (`new or old` on merge) | `Merger.summarize_source` input, `content_validate` prompt, `claims/index.md` description |
+| `source_ref` | Pointer into the Raw Source | LLM *initially*, then **unconditionally overwritten** by `Orchestrator._anchor_source_refs` to `<source_slug>#p<passage_index>` | `Writer._maintain_source_backlinks` (parses the leading segment to find the owning `Source`) |
 | `confidence` | Factual-certainty score | LLM; on merge, `max(base.confidence, new.confidence)` | Not consumed by any pipeline logic yet — informational |
 | `provenance_state` | How the Claim came to exist | LLM sets `"extracted"`/`"inferred"`/`"ambiguous"`; `DefaultMerger` always sets `"merged"` once a claim has been merged with an existing one | `content_validate`'s prompt (only `"extracted"` claims are checked for grounding in the passage) |
 | `related_concepts` | Slugs of linked `Concept` pages | LLM; `DefaultFixer.code_auto_fix` strips dangling targets; `DefaultMerger` unions on merge | `Writer._maintain_claim_backlinks` (adds this claim to each target's `key_facts`), body rendering (`## Related Pages`), `DefaultValidator._check_dangling_links` |
@@ -62,12 +62,12 @@ A general topic/entity page — the fallback type when no more specific type app
 | `related_pages` | Wikilinks to other Concept pages | LLM; `DefaultFixer` strips dangling targets; unioned on merge | body's `## Related Pages`, `DefaultValidator._check_dangling_links` |
 | `related_sources` | Source/provenance digest links | LLM; unioned on merge | body's `## Related Sources` |
 
-## `Document`
+## `Source`
 
 ```python
-class Document(BaseModel):
+class Source(BaseModel):
     slug: str
-    document_title: str
+    source_title: str
     source_path: str
     ingested_at: str
     summary: str
@@ -76,21 +76,22 @@ class Document(BaseModel):
     related_pages: list[str] = []
 ```
 
-A per-Raw-Source navigation page (D21, reversing an earlier D20 decision not to have one) — **not** a
-replacement for `Claim.source_ref` (which still points *out* of the wiki to the Raw Source itself, per D17);
-this is an *additional* in-wiki entry point summarizing everything a source produced. One `Document` exists
-per `SourceRef.id` the `Connector` returns, regardless of how many natural-paragraph passages that source was
-split into (D11/D12).
+A per-Raw-Source navigation page (D21, reversing an earlier D20 decision not to have one; named `Source` to
+match the naming `nashsu/llm_wiki` itself uses — implemented first under the name `Document` and renamed
+later, see `TODO.md`) — **not** a replacement for `Claim.source_ref` (which still points *out* of the wiki to
+the Raw Source itself, per D17); this is an *additional* in-wiki entry point summarizing everything a source
+produced. One `Source` exists per `SourceRef.id` the `Connector` returns, regardless of how many
+natural-paragraph passages that source was split into (D11/D12).
 
 | Field | Meaning | Written by | Read by |
 |---|---|---|---|
-| `slug` | Unique page identifier — the source's `SourceRef.id` | `Orchestrator._ensure_document_pages` | `_anchor_source_refs`'s target format, `Writer._maintain_document_backlinks`'s lookup key |
-| `document_title` | Human-readable title (source document title or filename) | `Orchestrator` — currently just set to `slug` (the `Connector` doesn't expose a friendlier title) | body's `# <document_title>` heading, `documents/index.md` description |
+| `slug` | Unique page identifier — the source's `SourceRef.id` | `Orchestrator._ensure_source_pages` | `_anchor_source_refs`'s target format, `Writer._maintain_source_backlinks`'s lookup key |
+| `source_title` | Human-readable title (source document title or filename) | `Orchestrator` — currently just set to `slug` (the `Connector` doesn't expose a friendlier title) | body's `# <source_title>` heading, `sources/index.md` description |
 | `source_path` | Location of the corresponding Raw Source folder | `Orchestrator` — also currently just `slug`, since a `Connector` is not guaranteed to be filesystem-backed and `slug` is the only portable identifier it always exposes | body's `## Source` section |
-| `ingested_at` | Date first compiled into the wiki | `Orchestrator._ensure_document_pages`, `datetime.now(UTC).date().isoformat()` at creation time — never updated again | Informational; not consumed by pipeline logic |
-| `summary` | One-paragraph summary — **never LLM output directly** | Starts `""` at creation; `Orchestrator._finalize_document_summaries` calls `Merger.summarize_document` once every passage of this document has been through Phase 2, and overwrites this field with the result | body text, `documents/index.md` description, `LLMExtractor._describe_page` (if `Document` is ever surfaced to `SelectPages` — see `pipeline-overview.md` for why it currently isn't) |
-| `produced_claims` | Slugs of Claims this document produced — **a backlink, not LLM output** | Exclusively `Writer._maintain_document_backlinks`, on every `write_claim` call whose `source_ref` resolves to this document | `_finalize_document_summaries` (the claim texts fed into `summarize_document`), body's `## Produced Claims` |
-| `produced_concepts` | Slugs of Concepts this document touched — same mechanism | Exclusively `Writer._maintain_document_backlinks` (added when a claim from this document has that concept in `related_concepts`) | body's `## Produced Concepts` |
+| `ingested_at` | Date first compiled into the wiki | `Orchestrator._ensure_source_pages`, `datetime.now(UTC).date().isoformat()` at creation time — never updated again | Informational; not consumed by pipeline logic |
+| `summary` | One-paragraph summary — **never LLM output directly** | Starts `""` at creation; `Orchestrator._finalize_source_summaries` calls `Merger.summarize_source` once every passage of this source has been through Phase 2, and overwrites this field with the result | body text, `sources/index.md` description, `LLMExtractor._describe_page` (if `Source` is ever surfaced to `SelectPages` — see `pipeline-overview.md` for why it currently isn't) |
+| `produced_claims` | Slugs of Claims this source produced — **a backlink, not LLM output** | Exclusively `Writer._maintain_source_backlinks`, on every `write_claim` call whose `source_ref` resolves to this source | `_finalize_source_summaries` (the claim texts fed into `summarize_source`), body's `## Produced Claims` |
+| `produced_concepts` | Slugs of Concepts this source touched — same mechanism | Exclusively `Writer._maintain_source_backlinks` (added when a claim from this source has that concept in `related_concepts`) | body's `## Produced Concepts` |
 | `related_pages` | Wikilinks to other pages | Never set by any current code path — the field exists for schema symmetry with `Claim`/`Concept` but nothing populates it yet | body's `## Related Pages` (renders empty today) |
 
 ## What's *not* an LLM-editable field, anywhere
@@ -98,7 +99,7 @@ split into (D11/D12).
 Three "deterministic overrides LLM" backlink/rendering mechanisms recur across all three types, and are worth
 naming once instead of per-field:
 
-- **Backlinks are Writer-only.** `Concept.key_facts`, `Document.produced_claims`, `Document.produced_concepts`
+- **Backlinks are Writer-only.** `Concept.key_facts`, `Source.produced_claims`, `Source.produced_concepts`
   are never present in an LLM prompt's expected output schema (the `CompileWikiPages`/`LLMPeriodicFix` system
   prompts explicitly say "do not include a `key_facts` field") — they only ever come from `Writer`'s
   incremental maintenance on write. See `writer.md`.

@@ -242,6 +242,29 @@ it was deferred work, not a deliberate scope cut). Now implemented:
       small-scale real-data validation as B-2 before deciding whether it's worth `SelectPages`-refreshing
       mid-batch or loosening `Unseen Overwrite`'s check for this specific case.
 
+### B4. Rename `Document` core type to `Source` (2026-08-29) — **implemented and verified**
+
+The per-Raw-Source navigation page core type introduced by D21 was originally implemented under the name
+`Document` (see B2/B3 above — those entries describe work done under that name and are left as-is, per this
+file's audit-trail convention). Renamed to `Source` to match the naming `nashsu/llm_wiki` (D21's inspiration)
+itself uses, and to stop colliding in spirit with `ports.connector.Document` (the *raw* Connector input text —
+an unrelated, unchanged type). Full rename across `src/` and `tests/`, plus every doc under
+`docs/implementation/`, root `README.md`, and `ARCHITECTURE.md`:
+
+- [x] `domain.entities.Document` → `Source`; field `document_title` → `source_title`
+- [x] `Writer.write_document`/`read_document` → `write_source`/`read_source`
+- [x] `MarkdownWriter`'s `documents/` bundle subdirectory → `sources/`; frontmatter `type: Document` →
+      `type: Source`; `_maintain_document_backlinks` → `_maintain_source_backlinks`
+- [x] `Merger.summarize_document` → `summarize_source`; cost-ledger stage `"Merger.summarize_document"` →
+      `"Merger.summarize_source"`
+- [x] `Orchestrator._ensure_document_pages`/`_finalize_document_summaries` → `_ensure_source_pages`/
+      `_finalize_source_summaries`; `_Passage.document_slug` → `source_slug`
+- [x] `ports.connector.Document` (raw Connector input) deliberately left untouched — verified via grep this is
+      a distinct, unrelated type
+- [x] All 12 affected test files updated; full `mypy`/`ruff`/`pytest` sweep (143 passed) plus a real CLI run
+      against a local mock LLM server, confirming `bundle/sources/<slug>.md` with `type: Source` renders
+      correctly
+
 ## C. Test coverage gaps (ASSUMPTIONS.md §C)
 
 - [x] Unit tests for **B-3**: `Writer` incremental backlink maintenance (`key_facts` field) — already covered

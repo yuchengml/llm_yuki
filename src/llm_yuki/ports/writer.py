@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import abc
 
-from llm_yuki.domain.entities import Claim, Concept, Document
+from llm_yuki.domain.entities import Claim, Concept, Source
 
 
 class Writer(abc.ABC):
-    """Output port: persists ``Claim``/``Concept``/``Document`` pages and supports reading existing ones back.
+    """Output port: persists ``Claim``/``Concept``/``Source`` pages and supports reading existing ones back.
 
     Implementations live under ``llm_yuki.adapters.writers``. Whatever the backing store, the persisted output
     must remain exportable/renderable as an OKF-conformant markdown bundle (proposal ARCHITECTURE.md §2.3,
@@ -25,8 +25,8 @@ class Writer(abc.ABC):
         """Persist a Claim page.
 
         Implementations must also perform the backlink maintenance described in proposal ARCHITECTURE.md
-        §2.3.2/D21: add ``claim.slug`` to each related Concept's ``key_facts`` and to the source Document's
-        ``produced_claims``, add each ``related_concepts`` slug to that Document's ``produced_concepts``, and
+        §2.3.2/D21: add ``claim.slug`` to each related Concept's ``key_facts`` and to the source Source page's
+        ``produced_claims``, add each ``related_concepts`` slug to that Source's ``produced_concepts``, and
         symmetrically update the Claims referenced in ``claim.contradicted_by``.
         """
         raise NotImplementedError
@@ -37,8 +37,8 @@ class Writer(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def write_document(self, document: Document) -> None:
-        """Persist a Document page (D21)."""
+    def write_source(self, source: Source) -> None:
+        """Persist a Source page (D21)."""
         raise NotImplementedError
 
     @abc.abstractmethod
@@ -52,8 +52,8 @@ class Writer(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def read_document(self, slug: str) -> Document | None:
-        """Read back a previously written Document, or ``None`` if it does not exist."""
+    def read_source(self, slug: str) -> Source | None:
+        """Read back a previously written Source, or ``None`` if it does not exist."""
         raise NotImplementedError
 
     @abc.abstractmethod

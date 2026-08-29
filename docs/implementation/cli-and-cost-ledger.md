@@ -103,7 +103,7 @@ class CostEvent(BaseModel):
     tokens_in: int
     tokens_out: int
     wall_clock_ms: float
-    round: int | None = None   # only meaningful for Merger.summarize_document's batch-reduce rounds
+    round: int | None = None   # only meaningful for Merger.summarize_source's batch-reduce rounds
     timestamp: str          # ISO 8601 UTC, auto-generated
 ```
 
@@ -114,7 +114,7 @@ class CostEvent(BaseModel):
 | `Extractor.SelectPages` | `LLMExtractor.select_pages` | Skipped entirely if `writer.list_pages()` is empty (see `extractor.md`) |
 | `Extractor.CompileWikiPages` | `LLMExtractor.compile_wiki_pages` | Every passage, Phase 1 |
 | `Merger.summary_merge` | `DefaultMerger._call_llm_merge` | Only on a real `Concept.summary` conflict with an `llm_client` configured (D22 layer 2, see `merger.md`) |
-| `Merger.summarize_document` | `DefaultMerger._summarize_batch` | Once (or more, if recursion is needed) per document, after all its passages finish Phase 2 — the only stage that sets `round` |
+| `Merger.summarize_source` | `DefaultMerger._summarize_batch` | Once (or more, if recursion is needed) per source, after all its passages finish Phase 2 — the only stage that sets `round` |
 | `Validator.ContentValidate` | `DefaultValidator.content_validate` | Every passage with at least one candidate claim, Phase 2 |
 | `Fixer.LLMPeriodicFix` | `DefaultFixer.llm_periodic_fix` | Only when `periodic_fix_due(batch_id)` and there are open content-type entries |
 
