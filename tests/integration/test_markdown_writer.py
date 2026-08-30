@@ -81,8 +81,9 @@ def test_write_and_read_source_round_trips(tmp_path: Path) -> None:
     read_back = writer.read_source("doc-1")
 
     # description is deterministically overwritten by the Writer on every write (D23 §5.4) — never LLM
-    # output, so the round-trip isn't a plain equality check against the as-constructed Source.
-    assert read_back == source.model_copy(update={"description": "Doc 1: A short document."})
+    # output, so the round-trip isn't a plain equality check against the as-constructed Source. It's plain
+    # discourse (the flattened summary), never a "source_title: ..." composite.
+    assert read_back == source.model_copy(update={"description": "A short document."})
 
 
 def test_write_claim_maintains_source_backlinks(tmp_path: Path) -> None:
@@ -209,15 +210,17 @@ def test_index_entries_fall_back_when_description_missing(tmp_path: Path) -> Non
         )
     )
 
-    assert "[[water]] — Water: A chemical compound." in (tmp_path / "concepts" / "index.md").read_text(
+    # falls back to summary alone — no "concept_title: ..." composite (description is plain discourse).
+    assert "[[water]] — A chemical compound." in (tmp_path / "concepts" / "index.md").read_text(
         encoding="utf-8"
     )
     assert "[[claim-1]] — Water boils at 100C." in (tmp_path / "claims" / "index.md").read_text(encoding="utf-8")
 
 
 def test_source_description_is_deterministic_not_llm_input(tmp_path: Path) -> None:
-    """Source.description (D23 §5.4) is always Writer-generated from source_title/summary — any value passed
-    in is overwritten, unlike Claim/Concept.description which is LLM output."""
+    """Source.description (D23 §5.4) is always Writer-generated from summary — any value passed in is
+    overwritten, unlike Claim/Concept.description which is LLM output. Plain discourse, never a
+    "source_title: ..." composite — the title is already the index entry's own [[slug]] link text."""
     writer = MarkdownWriter(tmp_path)
     writer.write_source(
         Source(
@@ -232,14 +235,25 @@ def test_source_description_is_deterministic_not_llm_input(tmp_path: Path) -> No
 
     source = writer.read_source("doc-1")
     assert source is not None
-    assert source.description == "Doc 1"  # no summary yet — falls back to just the title
+    assert source.description == ""  # no summary yet — nothing to describe
 
     writer.write_source(source.model_copy(update={"summary": "A short document."}))
-    assert writer.read_source("doc-1").description == "Doc 1: A short document."  # type: ignore[union-attr]
+    assert writer.read_source("doc-1").description == "A short document."  # type: ignore[union-attr]
 
-    assert "[[doc-1]] — Doc 1: A short document." in (tmp_path / "sources" / "index.md").read_text(
-        encoding="utf-8"
+
+def test_index_entry_omits_dash_when_description_empty(tmp_path: Path) -> None:
+    """A fresh Source (placeholder page, summary not generated yet — see pipeline-overview.md) has no
+    description at all. Its index.md entry must not carry a dangling "— " with nothing after it."""
+    writer = MarkdownWriter(tmp_path)
+    writer.write_source(
+        Source(
+            slug="doc-1", source_title="Doc 1", source_path="raw_sources/doc-1", ingested_at="2026-08-27", summary=""
+        )
     )
+
+    index_lines = (tmp_path / "sources" / "index.md").read_text(encoding="utf-8").splitlines()
+    assert "- [[doc-1]]" in index_lines
+    assert not any(line.startswith("- [[doc-1]] —") for line in index_lines)
 
 
 def test_source_description_flattens_multi_section_summary(tmp_path: Path) -> None:
@@ -261,13 +275,11 @@ def test_source_description_flattens_multi_section_summary(tmp_path: Path) -> No
     source = writer.read_source("doc-1")
     assert source is not None
     assert "\n" not in source.description
-    assert source.description == (
-        "Doc 1: Overview This document describes the Eiffel Tower. Details Completed in 1889."
-    )
+    assert source.description == "Overview This document describes the Eiffel Tower. Details Completed in 1889."
 
     index_lines = (tmp_path / "sources" / "index.md").read_text(encoding="utf-8").splitlines()
     assert (
-        "- [[doc-1]] — Doc 1: Overview This document describes the Eiffel Tower. Details Completed in 1889."
+        "- [[doc-1]] — Overview This document describes the Eiffel Tower. Details Completed in 1889."
         in index_lines
     )
 

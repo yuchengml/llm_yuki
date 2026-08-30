@@ -69,10 +69,11 @@ return slugs from the provided list — never invent one" (belt-and-suspenders w
 
 1. `claim_text` is a structured assertion, not a verbatim copy of the passage.
 2. `description` is a short **one-sentence** summary for `index.md` listings (D23 §5.4, extended beyond the
-   original decision — see `TODO.md`) — always short, regardless of how long `claim_text`/`summary` is.
-   Optional in the sense that a missing/empty value just falls back to `claim_text`/
-   `f"{concept_title}: {summary}"` at index-render time (see `writer.md`); Pydantic defaults it to `""` if the
-   LLM omits the key entirely, rather than raising.
+   original decision — see `TODO.md`) — always short, regardless of how long `claim_text`/`summary` is, and
+   always plain discourse (never `"<name>: <text>"` — the title/slug is already the index entry's own link
+   text). Optional in the sense that a missing/empty value just falls back to `claim_text`/`summary` at
+   index-render time (see `writer.md`); Pydantic defaults it to `""` if the LLM omits the key entirely,
+   rather than raising.
 3. Concept `summary` is **not** limited to one paragraph — the LLM is told to use its own judgment: plain
    prose for a simple Concept, or markdown `## ` subsections (e.g. `## History`, `## Usage`) when the topic
    has multiple distinct facets, without forcing structure onto something that doesn't need it. This is the

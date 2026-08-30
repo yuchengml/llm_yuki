@@ -357,7 +357,9 @@ literal text**, same as B5/B6:
       max_chars=160)` helper (strips `#`/`## ` markers, collapses whitespace/newlines to single spaces,
       truncates with `…`), applied at the single choke point (`_write_type_index`) so it covers every path
       into an index entry — the deterministic `Source` fallback, the `Concept` `concept_title: summary`
-      fallback, and even a syntactically-valid but instruction-ignoring LLM-supplied `description`
+      fallback, and even a syntactically-valid but instruction-ignoring LLM-supplied `description`.
+      **⚠️ 2026-08-30 superseded by B8**: the `f"{source_title}: ..."`/`f"{concept_title}: ..."` composite
+      format itself was wrong, not just its multi-line handling — see B8
 - [x] New tests: a `Concept.summary` containing its own `## History`/`## Usage` subsections round-trips
       correctly and the Writer's own `## Key Facts` section is still parsed correctly afterward; a
       `Source.summary` with subsections produces a single-line flattened `description`; a deliberately
@@ -367,6 +369,33 @@ literal text**, same as B5/B6:
       the first one is what caught both bugs above (a `sources/index.md` bullet visibly broken across
       multiple lines); the second, after the fix, confirmed clean single-line `index.md` entries and intact
       multi-section body content
+
+### B8. `description` is always plain discourse, never a `"<name>: <text>"` composite (2026-08-30) — **implemented and verified**
+
+User feedback: `description`, regardless of type, should be one paragraph of discourse — the frontmatter
+value must never look like `"Doc 1: This document describes..."`. B7's `_source_description` and the
+`Concept` index fallback both baked the page's title into the composed string; this corrects that (the
+title/slug is already the index entry's own `[[slug]]` link text, so repeating it is redundant, not just
+stylistically off). Extends beyond D23's literal text, same as B5/B6/B7:
+
+- [x] `MarkdownWriter._source_description`: dropped the `f"{source_title}: ..."` prefix — now just
+      `_plain_text_snippet(source.summary)` when `summary` is non-empty, or `""` (not `source_title`) when it
+      isn't. This is a real behavior change, not cosmetic: `Source.description` in frontmatter used to always
+      contain the title; it no longer does, ever
+- [x] `MarkdownWriter._concept_index_entries`'s fallback (used only when `Concept.description` is empty):
+      changed from `f"{concept_title}: {summary}"` to `summary` alone — this fallback was never written to
+      frontmatter (only into a transient `index.md` display string), but the same "no name prefix" principle
+      applies to it for consistency
+- [x] `MarkdownWriter._write_type_index`: when the flattened description is empty (a fresh `Source` with no
+      `summary` yet), the entry renders as bare `[[slug]]` — no trailing `— ` with nothing after it, which is
+      what a naive `""`-becomes-`""`-after-title-removed would have produced
+- [x] `entities.py`: `Source.description` field docstring updated to state the "plain discourse, never a
+      composite" rule explicitly
+- [x] 4 pre-existing tests updated (they asserted the old `"Doc 1: ..."`/`"Water: ..."` format); 1 new test
+      added for the bare-`[[slug]]`-when-empty rendering
+- [x] Full `mypy`/`ruff`/`pytest` sweep (152 passed) plus a real CLI run against a local mock LLM server,
+      confirming `Source.description` in the actual `.md` frontmatter is now pure discourse with no
+      `doc-eiffel: ` prefix
 
 ## C. Test coverage gaps (ASSUMPTIONS.md §C)
 

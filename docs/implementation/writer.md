@@ -197,23 +197,28 @@ it's the same field already persisted on the page:
 | Type | `description` origin | Fallback when empty (older bundle, or an LLM that omitted it) |
 |---|---|---|
 | `Claim` | LLM output, alongside `claim_text` | `claim_text` itself |
-| `Concept` | LLM output, alongside `summary` | `f"{concept_title}: {summary}"` |
-| `Source` | `MarkdownWriter._write_source_file`, deterministically, on every write — never LLM output (see `core-types.md`) | `source_title` alone, or `f"{source_title}: {_plain_text_snippet(summary)}"` once `summary` is non-empty (`_source_description`) |
+| `Concept` | LLM output, alongside `summary` | `summary` alone |
+| `Source` | `MarkdownWriter._write_source_file`, deterministically, on every write — never LLM output (see `core-types.md`) | (none needed — `_source_description` always sets it, to `""` while `summary` is still empty) |
 
 `_claim_index_entries`/`_concept_index_entries`/`_source_index_entries` each read `description or <fallback>`
 — so a page written before this field existed still gets a usable index entry, it just isn't the
-LLM-authored one-liner.
+LLM-authored one-liner. **Neither the origin nor any fallback ever prepends the page's title/slug** —
+`description` is plain discourse for all three types, never a `"<name>: <text>"` composite; the title is
+already the index entry's own `[[slug]]` link text, so repeating it would be redundant (this is why the
+`Concept` fallback dropped its earlier `f"{concept_title}: {summary}"` form).
 
 **Every entry is flattened through `_plain_text_snippet` in `_write_type_index` before being written** — this
 is the actual bug fix that makes any of the above safe now that `summary` can span multiple `## `
 subsections: naively embedding a multi-line `description`/fallback into `f"- [[{slug}]] — {description}"`
 would break `index.md`'s one-bullet-per-page format (this was caught by a real CLI smoke run against a
-`Source.summary` with subsections, before this flattening step existed — `f"{source_title}: {summary}"`
-produced a `description` containing raw newlines). `_plain_text_snippet` strips `#`/`## ` heading markers
-(keeping the heading text), collapses all whitespace/newlines to single spaces, and truncates with `…` past
-160 characters. It applies uniformly — to the deterministic `Source` fallback, the `Concept`
-`concept_title: summary` fallback, and even a syntactically-valid but instruction-ignoring LLM `description`
-that happens to contain a newline — so `index.md` stays well-formed no matter what produced the text.
+`Source.summary` with subsections, before this flattening step existed — the then-title-prefixed
+`_source_description` produced a `description` containing raw newlines). `_plain_text_snippet` strips
+`#`/`## ` heading markers (keeping the heading text), collapses all whitespace/newlines to single spaces, and
+truncates with `…` past 160 characters. It applies uniformly — to the deterministic `Source` fallback, the
+`Concept` `summary` fallback, and even a syntactically-valid but instruction-ignoring LLM `description` that
+happens to contain a newline — so `index.md` stays well-formed no matter what produced the text. When the
+flattened result is empty (a fresh `Source` with no `summary` yet), the entry is written as bare `[[slug]]`
+with no trailing `— ` at all, rather than a dangling dash.
 
 The root `index.md` is a fixed three-block template — `# Claims` / `# Concepts` / `# Sources`, each linking
 to that subdirectory's `index.md` — it never lists individual pages itself, matching OKF's progressive

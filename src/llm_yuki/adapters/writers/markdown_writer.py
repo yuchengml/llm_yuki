@@ -78,12 +78,14 @@ def _plain_text_snippet(text: str, max_chars: int = _DESCRIPTION_SNIPPET_MAX_CHA
 def _source_description(source: Source) -> str:
     """Deterministic ``Source.description`` (D23 §5.4) — never LLM output, see ``entities.py``.
 
+    Just the flattened prose, not ``f"{title}: ..."`` — a ``description``, for any of the three core types,
+    is one paragraph of discourse, never a ``"<name>: <description>"`` composite (the title is already the
+    index entry's own ``[[slug]]`` link text, so repeating it in the description would be redundant).
     ``summary`` may now be a multi-section write-up (not capped to one paragraph) — flattened via
     ``_plain_text_snippet`` so ``description`` stays what its name promises: one line, for ``index.md``.
+    Empty (not the title) while ``summary`` is still empty — there's no discourse to summarize yet.
     """
-    if not source.summary:
-        return source.source_title
-    return f"{source.source_title}: {_plain_text_snippet(source.summary)}"
+    return _plain_text_snippet(source.summary) if source.summary else ""
 
 
 def _extract_content(body: str) -> str:
@@ -354,7 +356,7 @@ class MarkdownWriter(Writer):
         for slug in sorted(self._page_slugs(_CONCEPTS_DIR)):
             concept = self.read_concept(slug)
             if concept is not None:
-                entries.append((slug, concept.description or f"{concept.concept_title}: {concept.summary}"))
+                entries.append((slug, concept.description or concept.summary))
         return entries
 
     def _source_index_entries(self) -> list[tuple[str, str]]:
@@ -370,7 +372,9 @@ class MarkdownWriter(Writer):
         # index.md line must stay one line no matter what produced the description (LLM output that ignores
         # the "one sentence" instruction, or a fallback built from a now-possibly-multi-section summary).
         lines = [f"# {label} Index", ""]
-        lines.extend(f"- [[{slug}]] — {_plain_text_snippet(description)}" for slug, description in entries)
+        for slug, description in entries:
+            flattened = _plain_text_snippet(description)
+            lines.append(f"- [[{slug}]] — {flattened}" if flattened else f"- [[{slug}]]")
         lines.append("")
         (self._root / dir_name / "index.md").write_text("\n".join(lines), encoding="utf-8")
 
