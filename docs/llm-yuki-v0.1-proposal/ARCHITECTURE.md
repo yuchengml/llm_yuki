@@ -50,18 +50,18 @@ Connector 攝入時原樣保留這個連結(對應 OKF 的 `resource`/`sources[]
 
 - 共享核心型別:所有領域都用 `Claim`/`Concept` 這兩個核心型別,核心 pipeline 只寫一套處理這兩型別的邏輯就能跨領域通用
 - 領域延伸型別:各領域 skill 自訂,不強制 namespace 前綴,**建議**(非強制)用 `<領域>:<Type>` 命名慣例(例如 `sci-paper:Paper`、`doc:Chart`)
-- **⚠️ 型別系統擴充為三型別**(D21 推翻 D20):`Claim`/`Concept`/`Document`——每份 Raw Source 現在有自己專屬的 `Document` 導覽頁,欄位見 1.5 節。`Claim.source_ref`(1.2 節)仍然是連出 wiki 之外、指到 1.1 節 Raw Sources 位置的出處指標,語意不變(D17),`Document` 是額外新增的導覽入口,不是取代它。
+- **⚠️ 型別系統擴充為三型別**(D21 推翻 D20):`Claim`/`Concept`/`Source`——每份 Raw Source 現在有自己專屬的 `Source` 導覽頁,欄位見 1.5 節。`Claim.source_ref`(1.2 節)仍然是連出 wiki 之外、指到 1.1 節 Raw Sources 位置的出處指標,語意不變(D17),`Source` 是額外新增的導覽入口,不是取代它。
 - 這次 POC 只驗證兩個領域各自的核心型別行為一致,不測試合併成單一跨領域 bundle 的情境
 
 來源:D9、D20(已由 D21 推翻部分結論)、D21。
 
-### 1.5 `Document` schema
+### 1.5 `Source` schema
 
 每份 D10 Raw Source 文件一頁,對應 `nashsu/llm_wiki` 的 `source` 型別。
 
 | 欄位 | 型別 | 說明 |
 |---|---|---|
-| `document_title` | string | 人類可讀標題(來源文件標題或檔名) |
+| `source_title` | string | 人類可讀標題(來源文件標題或檔名) |
 | `source_path` | string | 對應 D10 Raw Source 資料夾位置 |
 | `ingested_at` | string(date) | 首次編譯進 wiki 的日期 |
 | `summary` | string | 一段話摘要,生成機制見下 |
@@ -73,7 +73,7 @@ Connector 攝入時原樣保留這個連結(對應 OKF 的 `resource`/`sources[]
 
 1. 觸發時機:某份文件的所有 passage 都完成 Phase 1 抽取後(該文件所有 `Claim` 已產生),在 Phase 2 `Merger` 階段執行——不摺疊進任何 passage 的抽取呼叫。
 2. 收集該文件所有 `Claim.claim_text`,依 context window 預算(借用 `context-budget.ts` 的固定比例配額精神計算,見下方換算)估算是否一次放得下。
-3. 放得下:一次 LLM 呼叫直接總結成 `Document.summary`。
+3. 放得下:一次 LLM 呼叫直接總結成 `Source.summary`。
 4. 放不下:先將 `Claim` 依預算切成多個 batch,各自一次呼叫產生 batch summary;收集所有 batch summary,重複步驟 2 的預算檢查——放得下就一次總結成最終 `summary`,放不下就再切 batch、再總結一輪,遞迴直到收斂。
 5. **已知風險,未設安全上限**:`Claim` 數量極端多時,理論上遞迴輪數可能很多輪,這次不設收斂輪數上限保護,見 `ASSUMPTIONS.md`。
 
@@ -92,7 +92,7 @@ flowchart LR
 
     subgraph O["Orchestrator(核心領域邏輯,不含領域邏輯)"]
         direction TB
-        EX["Extractor<br/>Phase 1"] --> ME["Merger<br/>Phase 2<br/>三層保護 + Document.summary<br/>(recursive batch-reduce)"]
+        EX["Extractor<br/>Phase 1"] --> ME["Merger<br/>Phase 2<br/>三層保護 + Source.summary<br/>(recursive batch-reduce)"]
         ME -. "軟碰撞去重<br/>(僅設計,不實作)" .-> DEDUP["dedup 偵測"]
         ME --> VA["Validator<br/>Discover"]
         VA --> EBM["ErrorBook 管理"]
@@ -102,7 +102,7 @@ flowchart LR
 
     ME --> W["Writer<br/>(輸出 Port)"]
     EBM -. "log.md 事件" .-> W
-    W --> FS[("檔案系統:md 檔案<br/>bundle/(含 Claim/Concept/Document)")]
+    W --> FS[("檔案系統:md 檔案<br/>bundle/(含 Claim/Concept/Source)")]
     W -. "未來可替換" .-> DB[("DB 或其他後端")]
     EBM --> EBS[("error_book.yaml<br/>pipeline-state/")]
 
@@ -133,12 +133,12 @@ flowchart LR
 #### 2.2.2 `Merger`
 
 - **輸入**:`Extractor` 產出的候選
-- **職責**:去重(`is_new` 判定)、決定最終內容、生成 `Document.summary`(見下)——**不負責實際持久化**,決定完交給 `Writer`
+- **職責**:去重(`is_new` 判定)、決定最終內容、生成 `Source.summary`(見下)——**不負責實際持久化**,決定完交給 `Writer`
 - **三層合併保護**(D22,套用到既有 `Concept` 頁面的更新,`is_new = false` 時觸發):
   1. **第一層(deterministic,零成本)**:陣列型欄位(`aliases`/`tags`/`key_facts`/`related_pages`/`related_sources`)一律集合聯集,不叫 LLM——是 D18 `key_facts` 增量維護的通用化。
   2. **第二層(LLM 合併 + 長度比例拒絕)**:只有 `summary` 有實質衝突時才叫 LLM 合併;合併後長度 `< 70%` × max(舊/新長度)視為疑似內容流失,拒絕採用,退回第一層結果。70% 門檻借用 `llm_wiki` 的 `BODY_SHRINK_THRESHOLD`。跟 D13 Error Book 的 LLM 語意驗證互補,不重疊。
   3. **第三層(鎖定欄位)**:`concept_title`/`type`/`created` 不管第二層輸出什麼,一律強制回填既有值——D17/D18「決定性優先於 LLM」原則第三次套用。
-- **`Document.summary` 生成**:遞迴 batch-reduce,見 1.5 節,歸屬 `Merger` 職責延伸,不是新模組。
+- **`Source.summary` 生成**:遞迴 batch-reduce,見 1.5 節,歸屬 `Merger` 職責延伸,不是新模組。
 - **軟碰撞去重(⚠️ 僅架構設計,這次 POC 不實作)**:比照 `dedup.ts` 的 LLM 分組偵測(命名不同的同一實體,如同義詞/縮寫/跨語言),確認後合併並改寫所有引用。不實作理由見 D22——持續性 LLM 成本 + 必要性未驗證,比照 D16 對 skill 抽換的處理方式。
 - 來源:D12 Phase 2、D18、D21、D22
 
@@ -334,7 +334,7 @@ N/M 具體數值不在架構層級決定,留給 scaffolding 階段依實測效�
 | 3 | `contradicted_by` | frontmatter | Claim → Claim,語意是衝突,`{slug, reason}` |
 | 4 | `source_ref` | frontmatter | Claim/Concept → Raw Source(連出 wiki 之外) |
 | 5 | 圖片連結 | Raw Source txt 正文 | 正文 → `images/` |
-| 6 | `index.md` 目錄連結(D23:分層,依型別分子目錄各自一份) | `index.md`(根層 + `claims/`/`concepts/`/`documents/` 各一份) | Index → 該層/該型別底下所有頁面 |
+| 6 | `index.md` 目錄連結(D23:分層,依型別分子目錄各自一份) | `index.md`(根層 + `claims/`/`concepts/`/`sources/` 各一份) | Index → 該層/該型別底下所有頁面 |
 
 另有 `error_book.yaml` 的 `affected_refs`(第 4.4 節),不算 wiki page 內部連結,是 pipeline meta-state 對 wiki content 的連結。
 
@@ -352,12 +352,12 @@ N/M 具體數值不在架構層級決定,留給 scaffolding 階段依實測效�
 
 **結構**:改採 OKF 的分層索引(progressive disclosure),不是單一攤平檔案:
 
-- **根層 `bundle/index.md`**:依核心型別分三個區塊(`# Claims` / `# Concepts` / `# Documents`),每區塊底下一筆連結連到對應子目錄的 `index.md`,不在根層重複列出個別頁面。
+- **根層 `bundle/index.md`**:依核心型別分三個區塊(`# Claims` / `# Concepts` / `# Sources`),每區塊底下一筆連結連到對應子目錄的 `index.md`,不在根層重複列出個別頁面。
 - **子目錄 `claims/index.md` / `concepts/index.md` / `documents/index.md`**:各自完整列出該型別底下的所有頁面連結。
 
 **條目格式**(呼應 OKF spec 的 `* [標題](連結) - 描述` 慣例):每一筆連結都附一句話描述,描述來源:
 - `Concept`:取 `concept_title` + `summary`
-- `Document`:取 `document_title` + `summary`
+- `Source`:取 `source_title` + `summary`
 - `Claim`:沒有獨立摘要欄位,直接取 `claim_text` 本身當描述
 
 **生成方式**:不論哪一層,`Writer` 在 Phase 2 從檔案系統實際內容 + 各頁面既有欄位決定性重新渲染,不由 LLM 生成——「決定性優先於 LLM」原則第四次套用(前三次:D17 body 連結、D18 backlink、D22 三層保護的陣列聯集/鎖定欄位)。
@@ -372,7 +372,7 @@ N/M 具體數值不在架構層級決定,留給 scaffolding 階段依實測效�
 
 ### 6.1 編譯/維護端正確性
 
-- **`index.md` 完整性**:D23 之後是根層 index + `claims/`/`concepts/`/`documents/` 三個子目錄各自的 index 都要查——每個子目錄的 index 是否完整列出該型別底下所有頁面(無遺漏)、無孤兒頁面,根層 index 是否正確連到三個子目錄,階層跟磁碟實際結構一致
+- **`index.md` 完整性**:D23 之後是根層 index + `claims/`/`concepts/`/`sources/` 三個子目錄各自的 index 都要查——每個子目錄的 index 是否完整列出該型別底下所有頁面(無遺漏)、無孤兒頁面,根層 index 是否正確連到三個子目錄,階層跟磁碟實際結構一致
 - **`log.md` 稽核軌跡**:人工/合成注入已知矛盾到語料裡,跑完 lint 管線後,比對 `log.md` 實際記錄的偵測/歸因/修正筆數與內容,算 precision/recall
 
 明確排除:逐頁人工審閱內容品質、wikilink 語意人工評估、大規模使用者研究。
@@ -414,7 +414,7 @@ N/M 具體數值不在架構層級決定,留給 scaffolding 階段依實測效�
 | 欄位 | 說明 |
 |---|---|
 | `event_id` | 唯一識別碼 |
-| `stage` | 呼叫的模組/函式(對應 2.2/2.3 節的模組劃分,例如 `Extractor.compile`、`Validator.ContentValidate`、`Fixer.LLMPeriodicFix`、`Merger.summarize_document`〔D21 的 `Document.summary` 遞迴 batch-reduce,可加 `round` 欄位標記批次輪數〕) |
+| `stage` | 呼叫的模組/函式(對應 2.2/2.3 節的模組劃分,例如 `Extractor.compile`、`Validator.ContentValidate`、`Fixer.LLMPeriodicFix`、`Merger.summarize_source`〔D21 的 `Source.summary` 遞迴 batch-reduce,可加 `round` 欄位標記批次輪數〕) |
 | `batch_id` | 對應 3 節的 batch 概念 |
 | `tokens_in` / `tokens_out` | LLM 呼叫的輸入/輸出 token 數;**非 LLM 步驟(`CodeAutoFix`、`StructuralValidate`)明確記 0**,不留空 |
 | `wall_clock_ms` | 這次呼叫的實際耗時 |
@@ -437,4 +437,4 @@ N/M 具體數值不在架構層級決定,留給 scaffolding 階段依實測效�
 
 ## 待補齊
 
-這份文件反映 2026-08-27 為止的決議(D1–D23)。如果之後 `README.md` 有新決議或修正既有決議,回頭同步更新對應章節,以最新版本為準。
+這份文件反映 2026-08-27 為止的決議(D1–D24)。如果之後 `README.md` 有新決議或修正既有決議,回頭同步更新對應章節,以最新版本為準。
