@@ -297,6 +297,60 @@ def test_body_omits_sections_with_no_content(tmp_path: Path) -> None:
     assert "## Related Sources" not in body
 
 
+def test_content_fields_live_only_in_body_not_frontmatter(tmp_path: Path) -> None:
+    """claim_text/summary are content, not metadata — never duplicated into the YAML frontmatter block
+    (extends D23 beyond its literal text, see TODO.md)."""
+    writer = MarkdownWriter(tmp_path)
+    writer.write_concept(Concept(slug="water", concept_title="Water", summary="A chemical compound."))
+    writer.write_claim(
+        Claim(
+            slug="claim-1",
+            claim_text="Water boils at 100C at sea level.",
+            source_ref="doc-1#p1",
+            confidence=0.5,
+            provenance_state="extracted",
+        )
+    )
+    writer.write_source(
+        Source(
+            slug="doc-1",
+            source_title="Doc 1",
+            source_path="raw_sources/doc-1",
+            ingested_at="2026-08-27",
+            summary="A short document.",
+        )
+    )
+
+    claim_text = (tmp_path / "claims" / "claim-1.md").read_text(encoding="utf-8")
+    frontmatter_block, _, body = claim_text.partition("\n---\n")
+    assert "claim_text:" not in frontmatter_block
+    assert "Water boils at 100C at sea level." in body
+
+    concept_text = (tmp_path / "concepts" / "water.md").read_text(encoding="utf-8")
+    frontmatter_block, _, body = concept_text.partition("\n---\n")
+    assert "summary:" not in frontmatter_block
+    assert "A chemical compound." in body
+
+    source_text = (tmp_path / "sources" / "doc-1.md").read_text(encoding="utf-8")
+    frontmatter_block, _, body = source_text.partition("\n---\n")
+    assert "summary:" not in frontmatter_block
+    assert "A short document." in body
+    # description is metadata (a short blurb), unlike summary — it does stay in frontmatter.
+    assert "description:" in frontmatter_block
+
+
+def test_content_recovers_correctly_around_multiline_paragraphs_and_no_sections(tmp_path: Path) -> None:
+    """_extract_content must round-trip content that spans multiple lines/paragraphs, and content with no
+    '## ...' section following it at all (nothing to bound the scan on the end side)."""
+    writer = MarkdownWriter(tmp_path)
+    multiline_summary = "First sentence about water.\n\nSecond paragraph, still about water."
+    writer.write_concept(Concept(slug="water", concept_title="Water", summary=multiline_summary))
+
+    read_back = writer.read_concept("water")
+    assert read_back is not None
+    assert read_back.summary == multiline_summary
+
+
 def test_list_pages_returns_all_slugs(tmp_path: Path) -> None:
     writer = MarkdownWriter(tmp_path)
     writer.write_concept(Concept(slug="water", concept_title="Water", summary="A chemical compound."))

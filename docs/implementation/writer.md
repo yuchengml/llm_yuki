@@ -53,8 +53,8 @@ Every `<slug>.md` is YAML frontmatter + a markdown body:
 ---
 type: Claim
 slug: water-boils
-claim_text: Water boils at 100C at sea level.
-...every other field, dumped via claim.model_dump(mode="json")...
+description: Water's boiling point at sea level.
+...every other field except claim_text, dumped via claim.model_dump(mode="json", exclude={"claim_text"})...
 ---
 
 # water-boils
@@ -69,18 +69,31 @@ Water boils at 100C at sea level.
 ```
 
 `type` is injected as the first frontmatter key (not a field on the Pydantic models themselves) —
-`{"type": "Claim", **claim.model_dump(mode="json")}` — matching OKF's typed-frontmatter requirement.
-`read_claim`/`read_concept`/`read_source` parse the frontmatter block back out with `yaml.safe_load` and
-reconstruct the model via `Model.model_validate(frontmatter)`; a missing file returns `None`, never raises.
+`{"type": "Claim", **claim.model_dump(mode="json", exclude={"claim_text"})}` — matching OKF's
+typed-frontmatter requirement. **`claim_text`/`Concept.summary`/`Source.summary` are excluded from
+frontmatter entirely** — each type's main free-text field is "content," not metadata (extends D23 beyond its
+literal text, see `TODO.md`'s dated entry): it lives only in the body, right under the `# <title>` heading,
+never duplicated into YAML. Everything else (short/structured fields, including `description`, the one-line
+index blurb) stays in frontmatter as before.
+
+`read_claim`/`read_concept`/`read_source` parse the frontmatter block back out with `yaml.safe_load`, then
+recover the content field from the body via `_extract_content` (scans from the `# <title>` line to the first
+`## ...` subsection, or end of body) and merge it into the frontmatter dict *before* reconstructing the model
+via `Model.model_validate(frontmatter)` — the content field would otherwise be missing and fail Pydantic
+validation. A missing file returns `None`, never raises. `_extract_content` doesn't handle a content value
+that itself contains a line starting with `## ` — not expected in practice (`claim_text` is a short structured
+assertion, `summary` is prose without markdown headings), but worth knowing if this ever needs an escape hatch.
 
 ## Body rendering — deterministic, never LLM-generated
 
-Every `write_*` call renders the body from that same call's frontmatter fields, via a static
+Every `write_*` call renders the body from that same call's in-memory model fields, via a static
 `_render_*_body` method — `## Related Pages` / `## Related Sources` / `## Key Facts` / `## Produced Claims` /
 `## Produced Concepts` sections all come from this, never independently asked of an LLM. This is what keeps
 body and frontmatter from ever drifting apart, and avoids an entire class of consistency-check that would
 otherwise be needed (D17). A section is omitted entirely (not rendered as an empty heading) when its source
-list is empty — e.g. a `Claim` with no `related_concepts` gets no `## Related Pages` heading at all.
+list is empty — e.g. a `Claim` with no `related_concepts` gets no `## Related Pages` heading at all. The
+content field (`claim_text`/`summary`) is always the first thing rendered, right after the title — it's the
+*only* place that field is written to disk at all, see "Page file format" above.
 
 | Type | Body sections (in order) |
 |---|---|

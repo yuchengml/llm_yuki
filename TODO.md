@@ -292,6 +292,35 @@ folder's role — so this deviation from D23's literal text is recorded here ins
       CLI run against a local mock LLM server, confirming `index.md` entries render the LLM-supplied
       description and `Source.description` ignores an LLM-supplied value in favor of the deterministic one
 
+### B6. Stop duplicating `claim_text`/`Concept.summary`/`Source.summary` into frontmatter — content only, body-only (2026-08-30) — **implemented and verified**
+
+User feedback: a page's main free-text field ("content," as opposed to short/structured "metadata") shouldn't
+be duplicated into the YAML frontmatter block — YAML is a poor format for multi-line prose, and it was already
+being rendered into the body anyway. This **extends D23 beyond its literal text** the same way B5 does (see
+B5's note on why the deviation is recorded here rather than in `docs/llm-yuki-v0.1-proposal/`):
+
+- [x] `MarkdownWriter._write_claim_file`/`_write_concept_file`/`_write_source_file`: frontmatter dict now
+      built via `model.model_dump(mode="json", exclude={"claim_text"})` (or `{"summary"}` for
+      `Concept`/`Source`) — the content field is rendered into the body only, via the existing
+      `_render_*_body` methods (unchanged — they already read the in-memory model, not frontmatter)
+- [x] New `MarkdownWriter._extract_content(body) -> str`: recovers the content field from a page's body on
+      read — scans from the `# <title>` heading to the first `## ...` subsection (or end of body if there is
+      none), strips leading/trailing whitespace. Doesn't handle a content value that itself contains a line
+      starting with `## ` (not expected in practice — see `writer.md`)
+- [x] `read_claim`/`read_concept`/`read_source`: now read both frontmatter *and* body from `_read_page`
+      (previously discarded body with `frontmatter, _ = ...`), merge `_extract_content(body)` into the
+      frontmatter dict under the right key before `Model.model_validate(frontmatter)` — the content field
+      would otherwise be missing and fail Pydantic validation
+- [x] `description` (B5) stays in frontmatter — it's short index metadata, not body content, so it's
+      unaffected by this change
+- [x] New tests: frontmatter block asserted to no longer contain `claim_text:`/`summary:` keys;
+      multi-paragraph content (embedded blank lines) and content with zero `## ` sections following it (the
+      end-of-body edge case) both round-trip correctly through `_extract_content`
+- [x] Full `mypy`/`ruff`/`pytest` sweep (148 passed, all pre-existing round-trip tests kept passing
+      unmodified — they only ever asserted `read_back == <constructed model>`, never inspected raw
+      frontmatter text) plus a real CLI run against a local mock LLM server, confirming the on-disk
+      `claims/`/`concepts/`/`sources/*.md` files no longer duplicate `claim_text`/`summary` into frontmatter
+
 ## C. Test coverage gaps (ASSUMPTIONS.md §C)
 
 - [x] Unit tests for **B-3**: `Writer` incremental backlink maintenance (`key_facts` field) — already covered
