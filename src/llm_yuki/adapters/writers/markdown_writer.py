@@ -182,9 +182,7 @@ class MarkdownWriter(Writer):
 
     def list_pages(self) -> list[str]:
         """Return the slugs of all pages currently in the bundle, across all three core types."""
-        return sorted(
-            self._page_slugs(_CLAIMS_DIR) + self._page_slugs(_CONCEPTS_DIR) + self._page_slugs(_SOURCES_DIR)
-        )
+        return sorted(self._page_slugs(_CLAIMS_DIR) + self._page_slugs(_CONCEPTS_DIR) + self._page_slugs(_SOURCES_DIR))
 
     def _page_slugs(self, dir_name: str) -> list[str]:
         """Slugs of content pages in a type directory — excludes that directory's own ``index.md`` (D23)."""

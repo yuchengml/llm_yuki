@@ -188,9 +188,7 @@ def test_index_entries_use_description_field_when_set(tmp_path: Path) -> None:
         )
     )
 
-    assert "[[water]] — A common chemical compound." in (tmp_path / "concepts" / "index.md").read_text(
-        encoding="utf-8"
-    )
+    assert "[[water]] — A common chemical compound." in (tmp_path / "concepts" / "index.md").read_text(encoding="utf-8")
     assert "[[claim-1]] — Water's boiling point at sea level." in (tmp_path / "claims" / "index.md").read_text(
         encoding="utf-8"
     )
@@ -211,9 +209,7 @@ def test_index_entries_fall_back_when_description_missing(tmp_path: Path) -> Non
     )
 
     # falls back to summary alone — no "concept_title: ..." composite (description is plain discourse).
-    assert "[[water]] — A chemical compound." in (tmp_path / "concepts" / "index.md").read_text(
-        encoding="utf-8"
-    )
+    assert "[[water]] — A chemical compound." in (tmp_path / "concepts" / "index.md").read_text(encoding="utf-8")
     assert "[[claim-1]] — Water boils at 100C." in (tmp_path / "claims" / "index.md").read_text(encoding="utf-8")
 
 
@@ -278,10 +274,7 @@ def test_source_description_flattens_multi_section_summary(tmp_path: Path) -> No
     assert source.description == "Overview This document describes the Eiffel Tower. Details Completed in 1889."
 
     index_lines = (tmp_path / "sources" / "index.md").read_text(encoding="utf-8").splitlines()
-    assert (
-        "- [[doc-1]] — Overview This document describes the Eiffel Tower. Details Completed in 1889."
-        in index_lines
-    )
+    assert "- [[doc-1]] — Overview This document describes the Eiffel Tower. Details Completed in 1889." in index_lines
 
 
 def test_index_entry_flattens_a_multiline_description_regardless_of_source(tmp_path: Path) -> None:

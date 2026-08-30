@@ -78,7 +78,9 @@ class DefaultFixer(Fixer):
         if dropped or dangling_targets or malformed_slugs:
             logger.info(
                 "code_auto_fix: dropped=%d dangling_targets=%d malformed_refs=%d",
-                len(dropped), len(dangling_targets), len(malformed_slugs),
+                len(dropped),
+                len(dangling_targets),
+                len(malformed_slugs),
             )
         return CompiledUpdate(claims=claims, concepts=concepts)
 
@@ -127,7 +129,9 @@ class DefaultFixer(Fixer):
             writer.write_concept(concept)
         logger.info(
             "batch %d: llm_periodic_fix applied fixes to %d claim(s), %d concept(s)",
-            batch_id, len(fixed.claims), len(fixed.concepts),
+            batch_id,
+            len(fixed.claims),
+            len(fixed.concepts),
         )
 
 

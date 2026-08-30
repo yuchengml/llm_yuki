@@ -96,9 +96,7 @@ class ErrorBook(BaseModel):
     )
     _last_periodic_fix_batch: int | None = None
 
-    def update_error_book(
-        self, issues: list[ValidationIssue], batch_id: int, writer: Writer
-    ) -> list[ErrorBookEntry]:
+    def update_error_book(self, issues: list[ValidationIssue], batch_id: int, writer: Writer) -> list[ErrorBookEntry]:
         """Algorithm 1 line 8: ``ℬ ← UpdateErrorBook(ℬ, E)`` — Attribute + Constrain (Discover already ran).
 
         Deduplicates against existing *open* entries of the same ``error_type``/``phenomenon``: a repeat
@@ -177,8 +175,7 @@ class ErrorBook(BaseModel):
                 entry.verification_method = f"re-checked at batch {batch_id} against current Writer state"
                 closed.append(entry)
                 writer.append_log(
-                    f"batch {batch_id}: VerifyAndClose closed {entry.error_type} entry {entry.id} — "
-                    f"{entry.phenomenon}"
+                    f"batch {batch_id}: VerifyAndClose closed {entry.error_type} entry {entry.id} — {entry.phenomenon}"
                 )
                 logger.info("batch %d: closed %s entry %s", batch_id, entry.error_type, entry.id)
         return closed

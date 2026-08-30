@@ -71,7 +71,12 @@ class JsonlCostLedger:
         # Fixer — cheaper than adding a log line to each of those classes individually.
         logger.debug(
             "batch %d: %s — tokens_in=%d tokens_out=%d wall_clock_ms=%.1f%s",
-            batch_id, stage, tokens_in, tokens_out, wall_clock_ms, f" round={round}" if round is not None else "",
+            batch_id,
+            stage,
+            tokens_in,
+            tokens_out,
+            wall_clock_ms,
+            f" round={round}" if round is not None else "",
         )
         return event
 

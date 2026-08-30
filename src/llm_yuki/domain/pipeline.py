@@ -183,7 +183,10 @@ class Orchestrator:
         source_slugs = _unique_in_order(passage.source_slug for passage in passages)
         logger.info(
             "batch %d: starting — %d passage(s) across %d source(s), %d active constraint(s)",
-            batch_id, len(passages), len(source_slugs), len(constraints),
+            batch_id,
+            len(passages),
+            len(source_slugs),
+            len(constraints),
         )
 
         phase1_results = self._run_phase1(passages, constraints, batch_id)
@@ -237,9 +240,7 @@ class Orchestrator:
                 )
             )
 
-    def _run_phase1(
-        self, passages: list[_Passage], constraints: list[str], batch_id: int
-    ) -> list[_Phase1Result]:
+    def _run_phase1(self, passages: list[_Passage], constraints: list[str], batch_id: int) -> list[_Phase1Result]:
         """D12 Phase 1: ``SelectPages``/``CompileWikiPages`` in parallel across every passage in the batch."""
         if not passages:
             return []
@@ -256,7 +257,11 @@ class Orchestrator:
         update = self._extractor.compile_wiki_pages(passage.text, selected, constraints, batch_id)
         logger.debug(
             "batch %d: %s#p%d yielded %d claim(s), %d concept(s)",
-            batch_id, passage.source_slug, passage.index, len(update.claims), len(update.concepts),
+            batch_id,
+            passage.source_slug,
+            passage.index,
+            len(update.claims),
+            len(update.concepts),
         )
         return _Phase1Result(passage=passage, selected=selected, update=update)
 
@@ -272,7 +277,11 @@ class Orchestrator:
         if issues:
             logger.warning(
                 "batch %d: %s#p%d — %d structural issue(s), %d content issue(s)",
-                batch_id, passage.source_slug, passage.index, len(structural_issues), len(content_issues),
+                batch_id,
+                passage.source_slug,
+                passage.index,
+                len(structural_issues),
+                len(content_issues),
             )
             self._error_book.update_error_book(issues, batch_id, self._writer)
             if structural_issues:
@@ -328,6 +337,5 @@ def _anchor_source_refs(claims: list[Claim], source_slug: str, passage_index: in
     """
     new_ref = f"{source_slug}#p{passage_index}"
     return [
-        claim if claim.source_ref == new_ref else claim.model_copy(update={"source_ref": new_ref})
-        for claim in claims
+        claim if claim.source_ref == new_ref else claim.model_copy(update={"source_ref": new_ref}) for claim in claims
     ]
