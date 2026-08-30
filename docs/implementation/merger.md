@@ -37,6 +37,7 @@ below). This is a deliberate, documented scope limit, not an oversight.
 def _merge_claim_pair(base: Claim, new: Claim) -> Claim:
     return base.model_copy(update={
         "claim_text": new.claim_text or base.claim_text,
+        "description": new.description or base.description,
         "source_ref": new.source_ref or base.source_ref,
         "confidence": max(base.confidence, new.confidence),
         "provenance_state": "merged",
@@ -45,9 +46,10 @@ def _merge_claim_pair(base: Claim, new: Claim) -> Claim:
     })
 ```
 
-No LLM involvement at all for `Claim`s: `claim_text`/`source_ref` fall back to the new value if present else
-the old; `confidence` takes the max; `provenance_state` always becomes `"merged"`; `related_concepts` and
-`contradicted_by` are order-preserving unions (`contradicted_by` deduped by `.slug`, first `reason` wins).
+No LLM involvement at all for `Claim`s: `claim_text`/`description`/`source_ref` fall back to the new value if
+present else the old; `confidence` takes the max; `provenance_state` always becomes `"merged"`;
+`related_concepts` and `contradicted_by` are order-preserving unions (`contradicted_by` deduped by `.slug`,
+first `reason` wins).
 
 ## Concept merging — D22's three-layer protection
 
@@ -58,6 +60,7 @@ def _merge_concept_pair(self, base: Concept, new: Concept, batch_id: int) -> Con
         "aliases": _union(base.aliases, new.aliases),                     # layer 1
         "tags": _union(base.tags, new.tags),                              # layer 1
         "summary": self._merge_summary(base.summary, new.summary, batch_id),  # layers 1-2
+        "description": new.description or base.description,              # simple fallback, not layered
         "key_facts": _union(base.key_facts, new.key_facts),               # layer 1 (rarely non-empty here — see writer.md)
         "related_pages": _union(base.related_pages, new.related_pages),   # layer 1
         "related_sources": _union(base.related_sources, new.related_sources),  # layer 1
@@ -69,6 +72,12 @@ def _merge_concept_pair(self, base: Concept, new: Concept, batch_id: int) -> Con
 Every array field (`aliases`, `tags`, `key_facts`, `related_pages`, `related_sources`) is a straightforward
 order-preserving set union (`_union`: keep everything from `base`, append anything from `new` not already
 present). No LLM call, no conflict possible — a union can't lose information.
+
+`description` (D23 §5.4, extended beyond the original decision — see `TODO.md`) is not an array field, but
+also stays outside D22's layered treatment: plain `new or old`, same as `Claim.claim_text`/`source_ref`. It's
+index metadata, not body content — a stale or lost `description` just makes one `index.md` line less sharp,
+not a real content-loss risk the way losing part of `summary` would be, so it doesn't earn the LLM-merge +
+70%-rejection machinery layer 2 gives `summary`.
 
 ### Layer 2 — LLM merge + rejection, only on a *real* conflict
 

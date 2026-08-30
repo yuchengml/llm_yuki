@@ -32,18 +32,20 @@ Concept pages as JSON, matching this schema exactly:
 
 {
   "claims": [
-    {"slug": "...", "claim_text": "...", "source_ref": "...", "confidence": 0.0-1.0,
+    {"slug": "...", "claim_text": "...", "description": "...", "source_ref": "...", "confidence": 0.0-1.0,
      "provenance_state": "extracted"|"merged"|"inferred"|"ambiguous",
      "related_concepts": ["slug", ...], "contradicted_by": [{"slug": "...", "reason": "..."}]}
   ],
   "concepts": [
     {"slug": "...", "concept_title": "...", "aliases": ["...", ...], "tags": ["...", ...],
-     "summary": "...", "related_pages": ["slug", ...], "related_sources": ["...", ...]}
+     "summary": "...", "description": "...", "related_pages": ["slug", ...], "related_sources": ["...", ...]}
   ]
 }
 
 Rules:
 - claim_text is a structured assertion, not a verbatim copy of the passage.
+- description is a short one-sentence summary for index listings — distinct from claim_text/summary, which \
+may be longer or more structured.
 - source_ref must point into this passage (e.g. a document id, optionally "#locator").
 - Do not include a "key_facts" field on concepts — it is maintained separately by the pipeline, not by you.
 - Only reference related_concepts/contradicted_by/related_pages slugs that are either defined in this same \

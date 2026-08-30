@@ -34,11 +34,11 @@ and the current content of the pages it affects. Propose corrected versions of j
 resolve each issue, using this exact JSON schema:
 
 {
-  "claims": [{"slug": "...", "claim_text": "...", "source_ref": "...", "confidence": 0.0-1.0,
-    "provenance_state": "extracted"|"merged"|"inferred"|"ambiguous",
+  "claims": [{"slug": "...", "claim_text": "...", "description": "...", "source_ref": "...",
+    "confidence": 0.0-1.0, "provenance_state": "extracted"|"merged"|"inferred"|"ambiguous",
     "related_concepts": ["slug", ...], "contradicted_by": [{"slug": "...", "reason": "..."}]}],
   "concepts": [{"slug": "...", "concept_title": "...", "aliases": [...], "tags": [...], "summary": "...",
-    "related_pages": [...], "related_sources": [...]}]
+    "description": "...", "related_pages": [...], "related_sources": [...]}]
 }
 
 Include a page only if you are changing it to fix a listed issue, and repeat every field of that page, not \

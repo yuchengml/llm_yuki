@@ -140,7 +140,10 @@ execution — previously never actually built, despite being decided from the st
 - **`Writer`**: `MarkdownWriter` — writes OKF-conformant markdown under per-type `claims/`/`concepts/`/
   `sources/` subdirectories (each with its own `index.md`, plus a root `index.md` linking to all three,
   D23), renders body links deterministically, maintains backlinks (including `Source.produced_claims`/
-  `produced_concepts`), and appends `log.md` audit-trail events (`adapters/writers/`)
+  `produced_concepts`), and appends `log.md` audit-trail events (`adapters/writers/`). Every `index.md` entry
+  is followed by a one-line description sourced from that page's own `description` frontmatter field
+  (LLM-generated for `Claim`/`Concept`; deterministically Writer-generated for `Source`, extending D23 — see
+  `TODO.md`)
 - **`Extractor`**: `LLMExtractor` — LLM-backed `SelectPages`/`CompileWikiPages` (`adapters/llm/extractor.py`)
 - **`Merger`**: `DefaultMerger` — deterministic slug-exact dedupe; three-layer merge protection for `Concept`
   updates (array union / LLM merge + 70%-length rejection / locked `concept_title`, D22); generates

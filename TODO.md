@@ -265,6 +265,33 @@ an unrelated, unchanged type). Full rename across `src/` and `tests/`, plus ever
       against a local mock LLM server, confirming `bundle/sources/<slug>.md` with `type: Source` renders
       correctly
 
+### B5. Add a materialized `description` field to `Claim`/`Concept`/`Source`, for `index.md` entries (2026-08-30) — **implemented and verified**
+
+D23's original decision (`docs/llm-yuki-v0.1-proposal/README.md`, D23 point 2) said each `index.md` entry's
+one-line description would be *composed at render time* from an existing field — `claim_text` verbatim for
+`Claim`, `f"{concept_title}: {summary}"` for `Concept`/`Source` — with no separate field. User feedback asked
+for a real, independent `description` in each page's frontmatter instead. This **extends D23 beyond its
+literal text** (`docs/llm-yuki-v0.1-proposal/` is the authoritative decision-log record of *why* D1–D23 were
+decided and is never edited to reflect later implementation changes, per `AGENTS.md`'s description of that
+folder's role — so this deviation from D23's literal text is recorded here instead):
+
+- [x] `Claim.description`/`Concept.description`: new `str = ""` field, **LLM output** — `CompileWikiPages`'s
+      (and `LLMPeriodicFix`'s) prompt schema now asks for it explicitly, alongside `claim_text`/`summary`, as
+      a short one-sentence index blurb distinct from the (potentially longer) content field
+- [x] `Source.description`: new `str = ""` field, **never LLM output** — `MarkdownWriter._write_source_file`
+      deterministically overwrites it on every write from `source_title`/`summary`
+      (`f"{source_title}: {summary}"`, or just `source_title` while `summary` is still empty), same
+      "deterministic overrides LLM" treatment `_anchor_source_refs` gives `source_ref` (D17/D18/D22)
+- [x] Merge behavior: `Claim.description`/`Concept.description` merge `new or old`, same as `claim_text` —
+      deliberately **not** routed through D22's 3-layer `Concept.summary` protection, since this is index
+      metadata, not body content that needs loss-protection
+- [x] `MarkdownWriter`'s index-entry builders now read `description`, falling back to the pre-B5 composed
+      string when empty (an older bundle written before this field existed, or an LLM that omitted the key)
+- [x] `docs/implementation/core-types.md`/`writer.md`/`extractor.md`/`merger.md` updated; new tests in
+      `tests/integration/test_markdown_writer.py`; full `mypy`/`ruff`/`pytest` sweep (146 passed) plus a real
+      CLI run against a local mock LLM server, confirming `index.md` entries render the LLM-supplied
+      description and `Source.description` ignores an LLM-supplied value in favor of the deterministic one
+
 ## C. Test coverage gaps (ASSUMPTIONS.md §C)
 
 - [x] Unit tests for **B-3**: `Writer` incremental backlink maintenance (`key_facts` field) — already covered

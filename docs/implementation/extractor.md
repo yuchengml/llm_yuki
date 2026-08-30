@@ -65,16 +65,21 @@ each selected page's full content, only that they exist and are relevant), and `
 return slugs from the provided list — never invent one" (belt-and-suspenders with the post-filter above).
 
 **`_COMPILE_WIKI_PAGES_SYSTEM_PROMPT`**: specifies the exact JSON schema (`claims`/`concepts` arrays matching
-`Claim`/`Concept`'s fields), plus four rules:
+`Claim`/`Concept`'s fields, including `description`), plus five rules:
 
 1. `claim_text` is a structured assertion, not a verbatim copy of the passage.
-2. `source_ref` must point into this passage (a document id, optionally `#locator`) — **this value is
+2. `description` is a short one-sentence summary for `index.md` listings (D23 §5.4, extended beyond the
+   original decision — see `TODO.md`) — distinct from `claim_text`/`summary`, which may be longer or more
+   structured. Optional in the sense that a missing/empty value just falls back to `claim_text`/
+   `f"{concept_title}: {summary}"` at index-render time (see `writer.md`); Pydantic defaults it to `""` if the
+   LLM omits the key entirely, rather than raising.
+3. `source_ref` must point into this passage (a document id, optionally `#locator`) — **this value is
    overwritten unconditionally by `Orchestrator._anchor_source_refs` afterward**, so what the LLM puts here
    barely matters in practice; it exists mainly so `DefaultValidator._check_malformed_refs` still has
    something meaningful to lint before the anchor overwrites it (see `pipeline-overview.md`).
-3. Never include a `key_facts` field on concepts — that's `Writer`-maintained, not LLM output (see
+4. Never include a `key_facts` field on concepts — that's `Writer`-maintained, not LLM output (see
    `core-types.md`).
-4. Only reference `related_concepts`/`contradicted_by`/`related_pages` slugs that are either defined in this
+5. Only reference `related_concepts`/`contradicted_by`/`related_pages` slugs that are either defined in this
    same response or already among the provided pages — never invent a slug that resolves nowhere. (Not
    strictly enforced by code the way `select_pages`'s filter is — a violation here surfaces later as a
    `dangling_links` structural issue, see `validator.md`.)

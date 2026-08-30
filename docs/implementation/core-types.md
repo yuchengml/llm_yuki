@@ -15,6 +15,7 @@ entirely by code, and mixing the two up is the easiest way to misunderstand this
 class Claim(BaseModel):
     slug: str
     claim_text: str
+    description: str = ""
     source_ref: str
     confidence: float          # 0.0-1.0
     provenance_state: Literal["extracted", "merged", "inferred", "ambiguous"]
@@ -27,7 +28,8 @@ A sourced, extracted/inferred assertion — the smallest unit the contradiction-
 | Field | Meaning | Written by | Read by |
 |---|---|---|---|
 | `slug` | Unique page identifier | `LLMExtractor` (LLM output) | Everything that links to it |
-| `claim_text` | A structured assertion — **not** a verbatim copy of the source passage | LLM, or `DefaultMerger._merge_claim_pair` (`new or old` on merge) | `Merger.summarize_source` input, `content_validate` prompt, `claims/index.md` description |
+| `claim_text` | A structured assertion — **not** a verbatim copy of the source passage | LLM, or `DefaultMerger._merge_claim_pair` (`new or old` on merge) | `Merger.summarize_source` input, `content_validate` prompt, fallback for `claims/index.md`'s entry when `description` is empty |
+| `description` | Short one-line summary for `claims/index.md` entries (D23 §5.4, extended beyond the original decision — see `TODO.md`) | LLM; `DefaultMerger._merge_claim_pair` (`new or old` on merge, same as `claim_text`) | `MarkdownWriter._claim_index_entries` — falls back to `claim_text` when empty (e.g. a page written before this field existed) |
 | `source_ref` | Pointer into the Raw Source | LLM *initially*, then **unconditionally overwritten** by `Orchestrator._anchor_source_refs` to `<source_slug>#p<passage_index>` | `Writer._maintain_source_backlinks` (parses the leading segment to find the owning `Source`) |
 | `confidence` | Factual-certainty score | LLM; on merge, `max(base.confidence, new.confidence)` | Not consumed by any pipeline logic yet — informational |
 | `provenance_state` | How the Claim came to exist | LLM sets `"extracted"`/`"inferred"`/`"ambiguous"`; `DefaultMerger` always sets `"merged"` once a claim has been merged with an existing one | `content_validate`'s prompt (only `"extracted"` claims are checked for grounding in the passage) |
@@ -45,6 +47,7 @@ class Concept(BaseModel):
     aliases: list[str] = []
     tags: list[str] = []
     summary: str
+    description: str = ""
     key_facts: list[str] = []
     related_pages: list[str] = []
     related_sources: list[str] = []
@@ -55,9 +58,10 @@ A general topic/entity page — the fallback type when no more specific type app
 | Field | Meaning | Written by | Read by |
 |---|---|---|---|
 | `slug` | Unique page identifier | LLM | Everything that links to it |
-| `concept_title` | Human-readable title | LLM *initially*; **locked** on every subsequent merge (D22 layer 3 — `DefaultMerger._merge_concept_pair` always keeps `base.concept_title`, ignoring whatever the new candidate says) | body's `# <concept_title>` heading, `concepts/index.md` description |
+| `concept_title` | Human-readable title | LLM *initially*; **locked** on every subsequent merge (D22 layer 3 — `DefaultMerger._merge_concept_pair` always keeps `base.concept_title`, ignoring whatever the new candidate says) | body's `# <concept_title>` heading, fallback component for `concepts/index.md`'s entry when `description` is empty |
+| `summary` | One-paragraph summary | LLM; on merge, D22's three layers decide the final value (see `merger.md`) | body text, fallback component for `concepts/index.md`'s entry when `description` is empty, `LLMExtractor._describe_page` (what `SelectPages` sees) |
+| `description` | Short one-line summary for `concepts/index.md` entries (D23 §5.4, extended beyond the original decision — see `TODO.md`) — distinct from `summary`, which is a full paragraph | LLM; `DefaultMerger._merge_concept_pair` (`new or old` on merge — **not** D22's 3-layer `summary` protection, since this is index metadata, not body content) | `MarkdownWriter._concept_index_entries` — falls back to `f"{concept_title}: {summary}"` when empty |
 | `aliases`, `tags` | Free-form metadata | LLM; unioned on merge (D22 layer 1) | Not consumed by pipeline logic yet |
-| `summary` | One-paragraph summary | LLM; on merge, D22's three layers decide the final value (see `merger.md`) | body text, `concepts/index.md` description, `LLMExtractor._describe_page` (what `SelectPages` sees) |
 | `key_facts` | Slugs of related Claims — **a backlink, not LLM output** | Exclusively `Writer._maintain_claim_backlinks`; the `CompileWikiPages` prompt explicitly tells the LLM *not* to include this field | body's `## Key Facts` section |
 | `related_pages` | Wikilinks to other Concept pages | LLM; `DefaultFixer` strips dangling targets; unioned on merge | body's `## Related Pages`, `DefaultValidator._check_dangling_links` |
 | `related_sources` | Source/provenance digest links | LLM; unioned on merge | body's `## Related Sources` |
@@ -71,6 +75,7 @@ class Source(BaseModel):
     source_path: str
     ingested_at: str
     summary: str
+    description: str = ""
     produced_claims: list[str] = []
     produced_concepts: list[str] = []
     related_pages: list[str] = []
@@ -86,17 +91,18 @@ natural-paragraph passages that source was split into (D11/D12).
 | Field | Meaning | Written by | Read by |
 |---|---|---|---|
 | `slug` | Unique page identifier — the source's `SourceRef.id` | `Orchestrator._ensure_source_pages` | `_anchor_source_refs`'s target format, `Writer._maintain_source_backlinks`'s lookup key |
-| `source_title` | Human-readable title (source document title or filename) | `Orchestrator` — currently just set to `slug` (the `Connector` doesn't expose a friendlier title) | body's `# <source_title>` heading, `sources/index.md` description |
+| `source_title` | Human-readable title (source document title or filename) | `Orchestrator` — currently just set to `slug` (the `Connector` doesn't expose a friendlier title) | body's `# <source_title>` heading, input to `description` |
 | `source_path` | Location of the corresponding Raw Source folder | `Orchestrator` — also currently just `slug`, since a `Connector` is not guaranteed to be filesystem-backed and `slug` is the only portable identifier it always exposes | body's `## Source` section |
 | `ingested_at` | Date first compiled into the wiki | `Orchestrator._ensure_source_pages`, `datetime.now(UTC).date().isoformat()` at creation time — never updated again | Informational; not consumed by pipeline logic |
-| `summary` | One-paragraph summary — **never LLM output directly** | Starts `""` at creation; `Orchestrator._finalize_source_summaries` calls `Merger.summarize_source` once every passage of this source has been through Phase 2, and overwrites this field with the result | body text, `sources/index.md` description, `LLMExtractor._describe_page` (if `Source` is ever surfaced to `SelectPages` — see `pipeline-overview.md` for why it currently isn't) |
+| `summary` | One-paragraph summary — **never LLM output directly** | Starts `""` at creation; `Orchestrator._finalize_source_summaries` calls `Merger.summarize_source` once every passage of this source has been through Phase 2, and overwrites this field with the result | body text, input to `description`, `LLMExtractor._describe_page` (if `Source` is ever surfaced to `SelectPages` — see `pipeline-overview.md` for why it currently isn't) |
+| `description` | Short one-line summary for `sources/index.md` entries (D23 §5.4, extended beyond the original decision — see `TODO.md`) — **never LLM output, unlike `Claim`/`Concept.description`** | Exclusively `MarkdownWriter._write_source_file`, which unconditionally overwrites it to `f"{source_title}: {summary}"` (or just `source_title` while `summary` is still empty) on **every** write — any value passed in (e.g. a stale one, or one an LLM-generated `Source` construction attempt supplied) is discarded, same "deterministic overrides LLM" treatment as `source_ref` anchoring (D17/D18/D22) | `MarkdownWriter._source_index_entries` |
 | `produced_claims` | Slugs of Claims this source produced — **a backlink, not LLM output** | Exclusively `Writer._maintain_source_backlinks`, on every `write_claim` call whose `source_ref` resolves to this source | `_finalize_source_summaries` (the claim texts fed into `summarize_source`), body's `## Produced Claims` |
 | `produced_concepts` | Slugs of Concepts this source touched — same mechanism | Exclusively `Writer._maintain_source_backlinks` (added when a claim from this source has that concept in `related_concepts`) | body's `## Produced Concepts` |
 | `related_pages` | Wikilinks to other pages | Never set by any current code path — the field exists for schema symmetry with `Claim`/`Concept` but nothing populates it yet | body's `## Related Pages` (renders empty today) |
 
 ## What's *not* an LLM-editable field, anywhere
 
-Three "deterministic overrides LLM" backlink/rendering mechanisms recur across all three types, and are worth
+Four "deterministic overrides LLM" backlink/rendering mechanisms recur across all three types, and are worth
 naming once instead of per-field:
 
 - **Backlinks are Writer-only.** `Concept.key_facts`, `Source.produced_claims`, `Source.produced_concepts`
@@ -109,3 +115,8 @@ naming once instead of per-field:
   Facts` / `## Produced Claims` / `## Produced Concepts` section in a page's markdown body is derived
   deterministically from that same page's frontmatter by `MarkdownWriter`, not asked of the LLM separately —
   see `writer.md`. This is what keeps body and frontmatter from ever drifting apart.
+- **`Source.description` is always Writer-computed.** Unlike `Claim.description`/`Concept.description` (LLM
+  output, merged `new or old`), `Source.description` is recomputed from `source_title`/`summary` on every
+  single write, overwriting whatever value was passed in — the same treatment `_anchor_source_refs` gives
+  `Claim.source_ref`. This follows from `Source.summary` itself already being deterministic (D21 §1.5,
+  `Merger.summarize_source`, never direct LLM output) — there is no LLM-authored value to preserve.

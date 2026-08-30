@@ -80,7 +80,9 @@ def test_write_and_read_source_round_trips(tmp_path: Path) -> None:
     writer.write_source(source)
     read_back = writer.read_source("doc-1")
 
-    assert read_back == source
+    # description is deterministically overwritten by the Writer on every write (D23 §5.4) — never LLM
+    # output, so the round-trip isn't a plain equality check against the as-constructed Source.
+    assert read_back == source.model_copy(update={"description": "Doc 1: A short document."})
 
 
 def test_write_claim_maintains_source_backlinks(tmp_path: Path) -> None:
@@ -161,6 +163,83 @@ def test_index_lists_all_pages(tmp_path: Path) -> None:
     assert "[[water]]" in (tmp_path / "concepts" / "index.md").read_text(encoding="utf-8")
     assert "[[claim-1]]" in (tmp_path / "claims" / "index.md").read_text(encoding="utf-8")
     assert "[[doc-1]]" in (tmp_path / "sources" / "index.md").read_text(encoding="utf-8")
+
+
+def test_index_entries_use_description_field_when_set(tmp_path: Path) -> None:
+    """D23 §5.4: each index.md link is followed by that page's frontmatter description field."""
+    writer = MarkdownWriter(tmp_path)
+    writer.write_concept(
+        Concept(
+            slug="water",
+            concept_title="Water",
+            summary="A long paragraph about the chemical compound water...",
+            description="A common chemical compound.",
+        )
+    )
+    writer.write_claim(
+        Claim(
+            slug="claim-1",
+            claim_text="Water boils at 100C at sea level under standard atmospheric pressure.",
+            description="Water's boiling point at sea level.",
+            source_ref="doc-1#p1",
+            confidence=0.5,
+            provenance_state="extracted",
+        )
+    )
+
+    assert "[[water]] — A common chemical compound." in (tmp_path / "concepts" / "index.md").read_text(
+        encoding="utf-8"
+    )
+    assert "[[claim-1]] — Water's boiling point at sea level." in (tmp_path / "claims" / "index.md").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_index_entries_fall_back_when_description_missing(tmp_path: Path) -> None:
+    """A page written without a description (e.g. an older bundle) still gets a usable index entry."""
+    writer = MarkdownWriter(tmp_path)
+    writer.write_concept(Concept(slug="water", concept_title="Water", summary="A chemical compound."))
+    writer.write_claim(
+        Claim(
+            slug="claim-1",
+            claim_text="Water boils at 100C.",
+            source_ref="doc-1#p1",
+            confidence=0.5,
+            provenance_state="extracted",
+        )
+    )
+
+    assert "[[water]] — Water: A chemical compound." in (tmp_path / "concepts" / "index.md").read_text(
+        encoding="utf-8"
+    )
+    assert "[[claim-1]] — Water boils at 100C." in (tmp_path / "claims" / "index.md").read_text(encoding="utf-8")
+
+
+def test_source_description_is_deterministic_not_llm_input(tmp_path: Path) -> None:
+    """Source.description (D23 §5.4) is always Writer-generated from source_title/summary — any value passed
+    in is overwritten, unlike Claim/Concept.description which is LLM output."""
+    writer = MarkdownWriter(tmp_path)
+    writer.write_source(
+        Source(
+            slug="doc-1",
+            source_title="Doc 1",
+            source_path="raw_sources/doc-1",
+            ingested_at="2026-08-27",
+            summary="",
+            description="this LLM-supplied value must be ignored",
+        )
+    )
+
+    source = writer.read_source("doc-1")
+    assert source is not None
+    assert source.description == "Doc 1"  # no summary yet — falls back to just the title
+
+    writer.write_source(source.model_copy(update={"summary": "A short document."}))
+    assert writer.read_source("doc-1").description == "Doc 1: A short document."  # type: ignore[union-attr]
+
+    assert "[[doc-1]] — Doc 1: A short document." in (tmp_path / "sources" / "index.md").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_claim_body_renders_related_pages_and_sources_from_frontmatter(tmp_path: Path) -> None:

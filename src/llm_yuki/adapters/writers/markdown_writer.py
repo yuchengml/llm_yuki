@@ -38,6 +38,13 @@ _CONCEPTS_DIR = "concepts"
 _SOURCES_DIR = "sources"
 
 
+def _source_description(source: Source) -> str:
+    """Deterministic ``Source.description`` (D23 §5.4) — never LLM output, see ``entities.py``."""
+    if not source.summary:
+        return source.source_title
+    return f"{source.source_title}: {source.summary}"
+
+
 class MarkdownWriter(Writer):
     """Filesystem-backed Writer — the only backend implemented/validated in this POC (D16)."""
 
@@ -139,6 +146,7 @@ class MarkdownWriter(Writer):
         self._write_page(self._concept_path(concept.slug), frontmatter, body)
 
     def _write_source_file(self, source: Source) -> None:
+        source = source.model_copy(update={"description": _source_description(source)})
         frontmatter: dict[str, object] = {"type": "Source", **source.model_dump(mode="json")}
         body = self._render_source_body(source)
         self._write_page(self._source_path(source.slug), frontmatter, body)
@@ -265,7 +273,7 @@ class MarkdownWriter(Writer):
         for slug in sorted(self._page_slugs(_CLAIMS_DIR)):
             claim = self.read_claim(slug)
             if claim is not None:
-                entries.append((slug, claim.claim_text))
+                entries.append((slug, claim.description or claim.claim_text))
         return entries
 
     def _concept_index_entries(self) -> list[tuple[str, str]]:
@@ -273,7 +281,7 @@ class MarkdownWriter(Writer):
         for slug in sorted(self._page_slugs(_CONCEPTS_DIR)):
             concept = self.read_concept(slug)
             if concept is not None:
-                entries.append((slug, f"{concept.concept_title}: {concept.summary}"))
+                entries.append((slug, concept.description or f"{concept.concept_title}: {concept.summary}"))
         return entries
 
     def _source_index_entries(self) -> list[tuple[str, str]]:
@@ -281,7 +289,7 @@ class MarkdownWriter(Writer):
         for slug in sorted(self._page_slugs(_SOURCES_DIR)):
             source = self.read_source(slug)
             if source is not None:
-                entries.append((slug, f"{source.source_title}: {source.summary}"))
+                entries.append((slug, source.description or _source_description(source)))
         return entries
 
     def _write_type_index(self, dir_name: str, label: str, entries: list[tuple[str, str]]) -> None:

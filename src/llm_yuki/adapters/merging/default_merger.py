@@ -21,6 +21,12 @@ an LLM judgment call and is out of scope for this deterministic baseline (see ``
 ``context-budget.ts``. Fits in one call: summarize directly. Doesn't fit: split into budget-sized batches,
 summarize each, then recurse on the batch summaries until they fit — deliberately no round cap (ASSUMPTIONS.md
 B-5).
+
+``Claim.description``/``Concept.description`` (D23 §5.4, the short one-line ``index.md`` blurb) merge the
+same way as ``claim_text``/``source_ref`` — plain ``new or old``, no LLM-merge/rejection layer. Unlike
+``Concept.summary``, ``description`` is index metadata, not body content that needs D22's stronger
+loss-protection; ``Source.description`` never reaches this class at all — it is computed deterministically by
+``Writer`` on every write, not merged here (see ``markdown_writer.py``).
 """
 
 from __future__ import annotations
@@ -99,6 +105,7 @@ class DefaultMerger(Merger):
         return base.model_copy(
             update={
                 "claim_text": new.claim_text or base.claim_text,
+                "description": new.description or base.description,
                 "source_ref": new.source_ref or base.source_ref,
                 "confidence": max(base.confidence, new.confidence),
                 "provenance_state": "merged",
@@ -114,6 +121,7 @@ class DefaultMerger(Merger):
                 "aliases": _union(base.aliases, new.aliases),
                 "tags": _union(base.tags, new.tags),
                 "summary": self._merge_summary(base.summary, new.summary, batch_id),
+                "description": new.description or base.description,
                 "key_facts": _union(base.key_facts, new.key_facts),
                 "related_pages": _union(base.related_pages, new.related_pages),
                 "related_sources": _union(base.related_sources, new.related_sources),

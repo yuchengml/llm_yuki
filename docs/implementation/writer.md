@@ -164,13 +164,19 @@ Not incremental — every write re-scans that type's directory (`_page_slugs`, w
 cost of doing more I/O than strictly necessary per write; acceptable for this POC's scale.
 
 Each subdirectory's `index.md` fully lists that type's pages, one line each, with a one-line description
-sourced from a specific field per type — never separately generated:
+sourced from that page's own `description` frontmatter field (D23 §5.4, extended beyond the original
+decision — see `TODO.md`'s dated entry). `description` is never separately generated for the index alone;
+it's the same field already persisted on the page:
 
-| Type | Description source |
-|---|---|
-| `Claim` | `claim_text` itself (no separate summary field exists) |
-| `Concept` | `f"{concept_title}: {summary}"` |
-| `Source` | `f"{source_title}: {summary}"` |
+| Type | `description` origin | Fallback when empty (older bundle, or an LLM that omitted it) |
+|---|---|---|
+| `Claim` | LLM output, alongside `claim_text` | `claim_text` itself |
+| `Concept` | LLM output, alongside `summary` | `f"{concept_title}: {summary}"` |
+| `Source` | `MarkdownWriter._write_source_file`, deterministically, on every write — never LLM output (see `core-types.md`) | `source_title` alone, or `f"{source_title}: {summary}"` once `summary` is non-empty (`_source_description`) |
+
+`_claim_index_entries`/`_concept_index_entries`/`_source_index_entries` each read `description or <fallback>`
+— so a page written before this field existed still gets a usable index entry, it just isn't the
+LLM-authored one-liner.
 
 The root `index.md` is a fixed three-block template — `# Claims` / `# Concepts` / `# Sources`, each linking
 to that subdirectory's `index.md` — it never lists individual pages itself, matching OKF's progressive
