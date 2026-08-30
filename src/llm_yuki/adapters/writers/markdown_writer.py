@@ -46,7 +46,10 @@ from pathlib import Path
 import yaml
 
 from llm_yuki.domain.entities import Claim, Concept, ContradictionRef, Source
+from llm_yuki.logging import get_logger
 from llm_yuki.ports.writer import Writer
+
+logger = get_logger(__name__)
 
 _CLAIMS_DIR = "claims"
 _CONCEPTS_DIR = "concepts"
@@ -126,16 +129,19 @@ class MarkdownWriter(Writer):
         self._write_claim_file(claim)
         self._maintain_claim_backlinks(claim)
         self._regenerate_index()
+        logger.debug("wrote claim %r", claim.slug)
 
     def write_concept(self, concept: Concept) -> None:
         """Persist a Concept page."""
         self._write_concept_file(concept)
         self._regenerate_index()
+        logger.debug("wrote concept %r", concept.slug)
 
     def write_source(self, source: Source) -> None:
         """Persist a Source page (D21)."""
         self._write_source_file(source)
         self._regenerate_index()
+        logger.debug("wrote source %r", source.slug)
 
     def read_claim(self, slug: str) -> Claim | None:
         """Read back a previously written Claim, or ``None`` if it does not exist.

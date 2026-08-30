@@ -27,6 +27,9 @@ from llm_yuki.adapters.state.error_book_store import YamlErrorBookStore
 from llm_yuki.adapters.validation.default_validator import DefaultValidator
 from llm_yuki.adapters.writers.markdown_writer import MarkdownWriter
 from llm_yuki.domain.pipeline import Orchestrator
+from llm_yuki.logging import configure_logging, get_logger
+
+logger = get_logger(__name__)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -59,6 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint. Returns the process exit code."""
+    configure_logging()
     # Search from the current working directory upward (usecwd=True) — not from this file's location,
     # which is python-dotenv's default and would search the package's install path instead of wherever
     # the user actually ran the command from.
@@ -81,8 +85,14 @@ def _run_compile(
     try:
         llm_client = OpenAICompatibleClient.from_env()
     except LLMConfigError as exc:
+        logger.error("LLM configuration error: %s", exc)
         print(f"error: {exc}", file=sys.stderr)
         return 1
+
+    logger.info(
+        "starting compile: source_dir=%s bundle_dir=%s batch_id=%d max_workers=%d",
+        source_dir, bundle_dir, batch_id, max_workers,
+    )
 
     connector = TxtFileConnector(source_dir)
     writer = MarkdownWriter(bundle_dir)
@@ -102,6 +112,7 @@ def _run_compile(
     )
     orchestrator.run_batch(batch_id)
     error_book_store.save(error_book)
+    logger.info("compile finished: batch_id=%d", batch_id)
     return 0
 
 

@@ -55,7 +55,8 @@ llm_yuki/
 │   ├── ports/            # Connector / Writer abstract interfaces
 │   ├── adapters/          # Concrete implementations (I/O lives here): connectors/, writers/, llm/,
 │   │                       #   validation/, fixing/, merging/, state/, cost_ledger.py
-│   └── cli.py            # `llm-yuki` entrypoint — wires adapters into a real Orchestrator
+│   ├── cli.py             # `llm-yuki` entrypoint — wires adapters into a real Orchestrator
+│   └── logging.py         # Operational console logging: log format + get_logger()
 ├── tests/
 │   ├── unit/
 │   ├── integration/
@@ -206,6 +207,12 @@ written to a `pipeline-state` sibling of `<bundle_dir>` by default (override wit
 `--max-workers N` (default 4) caps how many Phase 1 extraction calls run concurrently (D12). Missing LLM
 configuration fails immediately at startup with a clear message, not partway through a batch. See
 `ARCHITECTURE.md` §5.
+
+Operational console logging (`src/llm_yuki/logging.py`) writes timestamped progress lines to stderr as the
+batch runs — batch/phase progress at `INFO`, per-passage/per-LLM-call detail at `DEBUG`. Set
+`LLM_YUKI_LOG_LEVEL=DEBUG` (in `.env` or the environment) for the verbose view. This is separate from
+`log.md` (the durable OKF audit trail inside the bundle) and from `cost_ledger.jsonl` — purely for watching a
+run happen in real time, see `docs/implementation/cli-and-cost-ledger.md`.
 
 `scripts/cli.py` is a thin convenience wrapper around the same `main()` for running it as a plain script
 instead of the installed console command:

@@ -1,7 +1,8 @@
 # CLI and Cost Ledger
 
-Two mechanisms that don't belong to any single pipeline stage: how the whole thing gets invoked
-(`llm_yuki.cli`), and how every LLM-backed call's cost gets recorded (`adapters/cost_ledger.py`, D19).
+Three mechanisms that don't belong to any single pipeline stage: how the whole thing gets invoked
+(`llm_yuki.cli`), how every LLM-backed call's cost gets recorded (`adapters/cost_ledger.py`, D19), and
+operational console logging (`llm_yuki.logging`) for watching a run happen in real time.
 
 ## The `llm-yuki` CLI
 
@@ -27,6 +28,7 @@ llm-yuki compile <source_dir> <bundle_dir> [--batch-id N] [--pipeline-state-dir 
 
 ```python
 def main(argv=None) -> int:
+    configure_logging()
     load_dotenv(find_dotenv(usecwd=True))
     args = build_parser().parse_args(argv)
     if args.command == "compile":
@@ -63,7 +65,10 @@ Every adapter gets constructed here, once, and shares the *same* `llm_client`/`c
 `Extractor`/`Merger`/`Validator`/`Fixer` — which is exactly why `JsonlCostLedger.record` needs to be
 thread-safe (Phase 1 calls it concurrently through `LLMExtractor`, see below).
 
-- **`.env` auto-loading**: `load_dotenv(find_dotenv(usecwd=True))` runs before anything else. `usecwd=True` is
+- **`configure_logging()` first, before anything else** — see "Operational Logging" below. Called once, here,
+  so every module's `get_logger(__name__)` call (evaluated at import time, throughout `domain/`/`adapters/`)
+  has something to propagate up to by the time `run_batch` actually starts producing log records.
+- **`.env` auto-loading**: `load_dotenv(find_dotenv(usecwd=True))` runs next, before argument parsing. `usecwd=True` is
   deliberate — `python-dotenv`'s default search starts from the *calling source file's* location, which for
   an installed package would search the package's install path, not wherever the user actually ran the
   command from. A real environment variable always takes precedence over a `.env` value if both are set.
@@ -143,3 +148,52 @@ small JSON line.
 `read_events() -> list[CostEvent]` reads and parses the whole file (empty list if it doesn't exist yet) — used
 by tests and any future cost-rollup tooling. There's no partial/streaming read; for this POC's scale, reading
 the whole file back is fine.
+
+## Operational Logging
+
+Module: `src/llm_yuki/logging.py`. Timestamped console lines on stderr, via Python's standard `logging`
+module — for watching a `compile` run happen in real time. **Not the same thing as `log.md`**
+(`Writer.append_log`, written by `ErrorBook.update_error_book`/`verify_and_close`, §4.4): that is a durable,
+audit-trail artifact inside the OKF bundle, read back for D7's precision/recall validation. This module
+produces nothing durable and nothing any pipeline logic reads back — purely operator-facing, and safe to
+ignore entirely if you only care about the bundle's contents.
+
+```python
+def configure_logging(level: int | str | None = None) -> None: ...  # attach the stderr handler, once
+def get_logger(name: str) -> logging.Logger: ...                     # logging.getLogger(name), no side effects
+```
+
+- **`configure_logging()`** is called exactly once, as early as possible, only from `cli.py::main` — the
+  standard "only entrypoints configure logging, libraries just call `get_logger`" convention. Idempotent about
+  the handler (a second call updates the level but never attaches a second handler, so log lines never
+  duplicate); level resolves from the explicit argument, else the `LLM_YUKI_LOG_LEVEL` environment variable
+  (matching how the rest of the CLI reads config from the environment, see `.env.example`), else `INFO`.
+- **`get_logger(name)`** is called at module scope (`logger = get_logger(__name__)`) throughout `domain/` and
+  `adapters/`, including `domain/pipeline.py` (`Orchestrator`) and `domain/error_book.py` (`ErrorBook`) — using
+  the standard `logging` module from `domain/` does **not** violate that layer's "no filesystem/network I/O"
+  module-boundary rule (`.ai/rules/python.md`): that rule targets I/O that needs a `ports/` abstraction to
+  keep the domain swappable/testable (`Connector`/`Writer`); stderr logging needs no port and is inert (zero
+  output) unless `configure_logging()` has run, so it never affects test behavior or determinism.
+- **Format**: `"%(asctime)s %(levelname)-8s %(name)s: %(message)s"`, e.g.
+  `2026-08-30T17:04:31+0000 INFO     llm_yuki.domain.pipeline: batch 1: complete`. `name` is always the
+  calling module's `__name__`, which — since every module in the package already has a dotted name starting
+  with `llm_yuki` — naturally nests under the `llm_yuki` logger `configure_logging` attaches its handler to,
+  with no manual prefixing needed.
+
+### Where log lines come from
+
+| Layer | Examples |
+|---|---|
+| `cli.py` | INFO on compile start/finish; ERROR on `LLMConfigError` (alongside the existing user-facing `print(..., file=sys.stderr)`, not a replacement for it) |
+| `domain/pipeline.py` (`Orchestrator`) | INFO batch start/Phase 1 start/periodic-fix/batch complete; DEBUG per-passage extraction counts; WARNING when Phase 2 finds structural/content issues |
+| `domain/error_book.py` (`ErrorBook`) | WARNING when a new entry opens, INFO on a recurrence or a close — mirrors the same events `log.md` records, at the operational-visibility layer instead of the audit-trail layer |
+| `adapters/cost_ledger.py` (`JsonlCostLedger.record`) | DEBUG per stage call (stage, tokens, wall-clock ms) — the single choke point every `Extractor`/`Merger`/`Validator`/`Fixer` LLM-backed (and timed non-LLM) call already funnels through, so this one hook covers all of them without touching each adapter class individually |
+| `adapters/connectors/txt_file_connector.py` | INFO on `list_sources`; DEBUG per `read_source` |
+| `adapters/writers/markdown_writer.py` | DEBUG per `write_claim`/`write_concept`/`write_source` |
+| `adapters/state/error_book_store.py` | DEBUG/INFO on load; DEBUG on save |
+| `adapters/fixing/default_fixer.py` | INFO when `code_auto_fix` actually drops/sanitizes something, or `llm_periodic_fix` runs/applies fixes |
+
+At the default `INFO` level, a `compile` run reads as a clean high-level narrative (batch start → Phase 1 →
+any issues found → periodic fix if due → batch complete); `LLM_YUKI_LOG_LEVEL=DEBUG` adds per-passage and
+per-LLM-call detail on top, without changing what gets written to `log.md`/`cost_ledger.jsonl`/the bundle —
+this is purely an additional, optional, non-durable view onto the same run.

@@ -17,7 +17,11 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from llm_yuki.domain.structural_checks import claim_is_complete, concept_is_complete, source_ref_well_formed
+from llm_yuki.logging import get_logger
 from llm_yuki.ports.writer import Writer
+
+logger = get_logger(__name__)
+"""Operational/console logging only — distinct from log.md (writer.append_log calls below), see logging.py."""
 
 ErrorType = Literal[
     "dangling_links",
@@ -115,6 +119,7 @@ class ErrorBook(BaseModel):
                     f"batch {batch_id}: UpdateErrorBook recurrence of {existing.error_type} entry "
                     f"{existing.id} — {existing.phenomenon} (refs: {', '.join(issue.affected_refs) or 'none'})"
                 )
+                logger.info("batch %d: recurrence of %s entry %s", batch_id, existing.error_type, existing.id)
                 continue
 
             root_cause = _ROOT_CAUSE_TEMPLATES[issue.error_type]
@@ -133,6 +138,7 @@ class ErrorBook(BaseModel):
                 f"batch {batch_id}: UpdateErrorBook opened {entry.error_type} entry {entry.id} — "
                 f"{entry.phenomenon} (refs: {', '.join(entry.affected_refs) or 'none'})"
             )
+            logger.warning("batch %d: opened %s entry %s — %s", batch_id, entry.error_type, entry.id, entry.phenomenon)
         return touched
 
     def active_constraints(self) -> list[str]:
@@ -174,6 +180,7 @@ class ErrorBook(BaseModel):
                     f"batch {batch_id}: VerifyAndClose closed {entry.error_type} entry {entry.id} — "
                     f"{entry.phenomenon}"
                 )
+                logger.info("batch %d: closed %s entry %s", batch_id, entry.error_type, entry.id)
         return closed
 
     def _find_open_entry(self, error_type: ErrorType, phenomenon: str) -> ErrorBookEntry | None:

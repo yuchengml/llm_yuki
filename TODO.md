@@ -397,6 +397,47 @@ stylistically off). Extends beyond D23's literal text, same as B5/B6/B7:
       confirming `Source.description` in the actual `.md` frontmatter is now pure discourse with no
       `doc-eiffel: ` prefix
 
+### B9. Operational console logging (2026-08-30) — **implemented and verified**
+
+User request: write logs for the appropriate parts of a compile run, via a dedicated module defining the log
+format and a `get_logger()` helper. This is a genuinely new mechanism, not covered by any proposal decision
+(D1–D23 never discuss operational logging — only `log.md`, the durable domain audit trail, D14/§4.4) — so
+there is no D-number/literal-text this extends, unlike B5–B8.
+
+- [x] New `src/llm_yuki/logging.py`: `configure_logging(level=None)` (attaches one stderr `StreamHandler` to
+      the `llm_yuki` logger namespace, idempotent about the handler; level resolves from the argument, else
+      `LLM_YUKI_LOG_LEVEL` env var, else `INFO`) + `get_logger(name)` (thin `logging.getLogger(name)`
+      passthrough, no side effects — the standard "libraries don't configure logging" convention). Format:
+      `"%(asctime)s %(levelname)-8s %(name)s: %(message)s"`
+- [x] **Explicitly not `log.md`**: that remains `Writer.append_log`'s durable, OKF-bundle-adjacent audit
+      trail (read back for D7 validation); this module produces nothing durable and nothing any pipeline
+      logic reads back — purely operator-facing stderr output. Documented as such in both places to avoid
+      future confusion between the two
+- [x] Using the standard `logging` module from `domain/pipeline.py`/`domain/error_book.py` does **not**
+      violate those modules' "no filesystem/network I/O" rule (`.ai/rules/python.md`) — that rule is scoped
+      to I/O needing a `ports/` abstraction for testability (`Connector`/`Writer`); stderr logging needs no
+      port and is inert (zero output) unless `configure_logging()` has run, so it never affects test
+      behavior/determinism. Documented inline in `logging.py`'s module docstring
+- [x] `cli.py` calls `configure_logging()` first thing in `main()`; logs compile start/finish and the
+      `LLMConfigError` path (alongside, not replacing, the existing user-facing `print(..., file=sys.stderr)`)
+- [x] Logging added at the "appropriate parts" across every layer: `domain/pipeline.py` (`Orchestrator`) —
+      batch/Phase 1 start, periodic-fix trigger, batch complete (INFO), per-passage extraction (DEBUG),
+      structural/content issues found (WARNING); `domain/error_book.py` (`ErrorBook`) — entry
+      opened/recurrence/closed, mirroring the same events already written to `log.md`;
+      `adapters/cost_ledger.py`'s `record()` — a single DEBUG choke point covering every
+      `Extractor`/`Merger`/`Validator`/`Fixer` LLM-backed (and timed non-LLM) call, so no need to instrument
+      each adapter class separately; `adapters/connectors/txt_file_connector.py`, `adapters/writers/
+      markdown_writer.py`, `adapters/state/error_book_store.py` — lighter-touch INFO/DEBUG on
+      list/read/write/load/save
+- [x] New `tests/unit/test_logging.py` (8 tests): handler attachment/idempotency, level resolution
+      (explicit arg > env var > default), no side effects from `get_logger` alone, child-logger propagation
+      to the configured root. Uses an autouse fixture to reset the module-global handler/level state before
+      and after each test, since `configure_logging` is a process-wide side effect otherwise shared with
+      `tests/unit/test_cli.py` (which also exercises `main()`)
+- [x] Full `mypy`/`ruff`/`pytest` sweep (160 passed, 32 source files) plus a real CLI run at both `INFO` (the
+      default) and `LLM_YUKI_LOG_LEVEL=DEBUG`, confirming the format renders correctly, DEBUG lines are
+      genuinely suppressed at INFO, and the log stream reads as a coherent narrative of the batch
+
 ## C. Test coverage gaps (ASSUMPTIONS.md §C)
 
 - [x] Unit tests for **B-3**: `Writer` incremental backlink maintenance (`key_facts` field) — already covered

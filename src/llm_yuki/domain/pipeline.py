@@ -17,10 +17,15 @@ from datetime import UTC, datetime
 from llm_yuki.domain.entities import Claim, Concept, Source
 from llm_yuki.domain.error_book import ErrorBook, ValidationIssue
 from llm_yuki.domain.passage_splitter import split_into_natural_paragraphs
+from llm_yuki.logging import get_logger
 from llm_yuki.ports.connector import Connector
 from llm_yuki.ports.writer import Writer
 
 _DEFAULT_MAX_WORKERS = 4
+
+logger = get_logger(__name__)
+"""Operational/console logging only (see logging.py) — distinct from ErrorBook's log.md audit trail, and not
+filesystem/network I/O, so this doesn't violate this module's "no I/O" boundary rule (.ai/rules/python.md)."""
 
 
 @dataclass
@@ -176,6 +181,10 @@ class Orchestrator:
         constraints = self._error_book.active_constraints()
         passages = self._collect_passages()
         source_slugs = _unique_in_order(passage.source_slug for passage in passages)
+        logger.info(
+            "batch %d: starting — %d passage(s) across %d source(s), %d active constraint(s)",
+            batch_id, len(passages), len(source_slugs), len(constraints),
+        )
 
         phase1_results = self._run_phase1(passages, constraints, batch_id)
 
@@ -190,8 +199,11 @@ class Orchestrator:
         self._finalize_source_summaries(source_slugs, batch_id)
 
         if self._error_book.periodic_fix_due(batch_id):
+            logger.info("batch %d: periodic fix due — running LLMPeriodicFix + VerifyAndClose", batch_id)
             self._fixer.llm_periodic_fix(self._error_book, self._writer, batch_id)
             self._error_book.verify_and_close(self._writer, batch_id)
+
+        logger.info("batch %d: complete", batch_id)
 
     def _collect_passages(self) -> list[_Passage]:
         """D11: split every source's text into natural paragraphs — the actual extraction units."""
@@ -231,14 +243,21 @@ class Orchestrator:
         """D12 Phase 1: ``SelectPages``/``CompileWikiPages`` in parallel across every passage in the batch."""
         if not passages:
             return []
-        with ThreadPoolExecutor(max_workers=min(self._max_workers, len(passages))) as pool:
+        workers = min(self._max_workers, len(passages))
+        logger.info("batch %d: Phase 1 — extracting %d passage(s), max_workers=%d", batch_id, len(passages), workers)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = [pool.submit(self._extract_one, passage, constraints, batch_id) for passage in passages]
             return [future.result() for future in futures]
 
     def _extract_one(self, passage: _Passage, constraints: list[str], batch_id: int) -> _Phase1Result:
         """Algorithm 1 lines 1-3 for one passage — the unit of work Phase 1 parallelizes over."""
+        logger.debug("batch %d: extracting %s#p%d", batch_id, passage.source_slug, passage.index)
         selected = self._extractor.select_pages(passage.text, self._writer, batch_id)
         update = self._extractor.compile_wiki_pages(passage.text, selected, constraints, batch_id)
+        logger.debug(
+            "batch %d: %s#p%d yielded %d claim(s), %d concept(s)",
+            batch_id, passage.source_slug, passage.index, len(update.claims), len(update.concepts),
+        )
         return _Phase1Result(passage=passage, selected=selected, update=update)
 
     def _run_phase2(self, result: _Phase1Result, batch_id: int) -> None:
@@ -251,6 +270,10 @@ class Orchestrator:
         issues = structural_issues + content_issues
 
         if issues:
+            logger.warning(
+                "batch %d: %s#p%d — %d structural issue(s), %d content issue(s)",
+                batch_id, passage.source_slug, passage.index, len(structural_issues), len(content_issues),
+            )
             self._error_book.update_error_book(issues, batch_id, self._writer)
             if structural_issues:
                 update = self._fixer.code_auto_fix(update, structural_issues)

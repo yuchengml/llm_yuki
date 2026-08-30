@@ -18,6 +18,10 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from llm_yuki.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 class CostEvent(BaseModel):
     """One row of ``cost_ledger.jsonl`` (proposal ARCHITECTURE.md §7.2)."""
@@ -63,6 +67,12 @@ class JsonlCostLedger:
         )
         with self._lock, self._path.open("a", encoding="utf-8") as f:
             f.write(event.model_dump_json() + "\n")
+        # Single choke point for every stage call (LLM-backed or not) across Extractor/Merger/Validator/
+        # Fixer — cheaper than adding a log line to each of those classes individually.
+        logger.debug(
+            "batch %d: %s — tokens_in=%d tokens_out=%d wall_clock_ms=%.1f%s",
+            batch_id, stage, tokens_in, tokens_out, wall_clock_ms, f" round={round}" if round is not None else "",
+        )
         return event
 
     def record_call(self, stage: str, batch_id: int) -> "_TimedCall":

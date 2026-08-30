@@ -21,7 +21,10 @@ from llm_yuki.domain.entities import Claim, Concept
 from llm_yuki.domain.error_book import ErrorBook, ErrorBookEntry, ValidationIssue
 from llm_yuki.domain.pipeline import CompiledUpdate, Fixer
 from llm_yuki.domain.structural_checks import source_ref_well_formed
+from llm_yuki.logging import get_logger
 from llm_yuki.ports.writer import Writer
+
+logger = get_logger(__name__)
 
 _DROP_TYPES = frozenset({"unseen_overwrite", "index_inconsistency"})
 _WHITESPACE = re.compile(r"\s+")
@@ -72,6 +75,11 @@ class DefaultFixer(Fixer):
         concepts = [
             _sanitize_concept(concept, dangling_targets) for concept in update.concepts if concept.slug not in dropped
         ]
+        if dropped or dangling_targets or malformed_slugs:
+            logger.info(
+                "code_auto_fix: dropped=%d dangling_targets=%d malformed_refs=%d",
+                len(dropped), len(dangling_targets), len(malformed_slugs),
+            )
         return CompiledUpdate(claims=claims, concepts=concepts)
 
     def llm_periodic_fix(self, error_book: ErrorBook, writer: Writer, batch_id: int) -> None:
@@ -88,7 +96,9 @@ class DefaultFixer(Fixer):
             )
         entries = [e for e in error_book.entries if e.status == "open" and e.error_type in _CONTENT_ERROR_TYPES]
         if not entries:
+            logger.debug("batch %d: llm_periodic_fix — no open content-type entries, skipping", batch_id)
             return
+        logger.info("batch %d: llm_periodic_fix — %d open content issue(s)", batch_id, len(entries))
 
         user_prompt = "Open content issues:\n\n" + "\n\n".join(_describe_entry(entry, writer) for entry in entries)
 
@@ -115,6 +125,10 @@ class DefaultFixer(Fixer):
             writer.write_claim(claim)
         for concept in fixed.concepts:
             writer.write_concept(concept)
+        logger.info(
+            "batch %d: llm_periodic_fix applied fixes to %d claim(s), %d concept(s)",
+            batch_id, len(fixed.claims), len(fixed.concepts),
+        )
 
 
 def _slugs_of_type(issues: list[ValidationIssue], error_types: frozenset[str] | set[str]) -> set[str]:
