@@ -306,7 +306,9 @@ B5's note on why the deviation is recorded here rather than in `docs/llm-yuki-v0
 - [x] New `MarkdownWriter._extract_content(body) -> str`: recovers the content field from a page's body on
       read — scans from the `# <title>` heading to the first `## ...` subsection (or end of body if there is
       none), strips leading/trailing whitespace. Doesn't handle a content value that itself contains a line
-      starting with `## ` (not expected in practice — see `writer.md`)
+      starting with `## ` (not expected in practice — see `writer.md`). **⚠️ 2026-08-30 superseded by B7**:
+      that assumption turned out wrong within the same day — see B7, which replaces this scan with a sentinel
+      marker once `summary` was allowed to have its own `## ` subsections
 - [x] `read_claim`/`read_concept`/`read_source`: now read both frontmatter *and* body from `_read_page`
       (previously discarded body with `frontmatter, _ = ...`), merge `_extract_content(body)` into the
       frontmatter dict under the right key before `Model.model_validate(frontmatter)` — the content field
@@ -320,6 +322,51 @@ B5's note on why the deviation is recorded here rather than in `docs/llm-yuki-v0
       unmodified — they only ever asserted `read_back == <constructed model>`, never inspected raw
       frontmatter text) plus a real CLI run against a local mock LLM server, confirming the on-disk
       `claims/`/`concepts/`/`sources/*.md` files no longer duplicate `claim_text`/`summary` into frontmatter
+
+### B7. `description` = one refined sentence, `summary` = full write-up with optional subsections; sentinel-based content/section boundary (2026-08-30) — **implemented and verified**
+
+User feedback: `description` (B5) should always be a precisely refined one-liner; `summary` (`Concept`/
+`Source`) should be free to be a complete write-up, including markdown subsections, rather than the
+one-paragraph cap the prompts and `entities.py` docstrings both enforced. This **extends D23 beyond its
+literal text**, same as B5/B6:
+
+- [x] `entities.py`: `Concept.summary`/`Source.summary` docstrings changed from "one-paragraph" to "not
+      capped to one paragraph — plain prose or markdown `## ` subsections, LLM/batch-reduce's judgment call"
+- [x] `LLMExtractor`'s `_COMPILE_WIKI_PAGES_SYSTEM_PROMPT`: new rule giving the LLM explicit permission (not a
+      requirement) to structure `summary` with `## ` subsections when a Concept has multiple distinct facets;
+      reaffirms `description` stays a single sentence regardless
+- [x] `DefaultMerger`'s `_MERGE_SUMMARY_SYSTEM_PROMPT` (D22 layer 2) and `_SUMMARIZE_SOURCE_SYSTEM_PROMPT`
+      (D21 §1.5 recursive batch-reduce): both dropped their hard "one-paragraph" constraint; both now instruct
+      the LLM to preserve/merge `## ` subsection structure from either input rather than flattening it back
+      into prose when structure is already present. The 70%-length-rejection safety net (D22 layer 2) is
+      kept as-is (character-length percentage, not a subsection-aware check) — a deliberate scope decision,
+      not an oversight
+- [x] `DefaultFixer`'s `_LLM_PERIODIC_FIX_SYSTEM_PROMPT`: added a rule to preserve a concept's existing `## `
+      subsection structure while fixing an unrelated content issue, since it must repeat every field in full
+- [x] **Real bug found and fixed by a manual CLI smoke run, not by the pre-existing test suite**: B6's
+      `_extract_content` (scans for the first line starting with `## ` to find where content ends) breaks the
+      moment `summary` legitimately contains its own `## ` subsection — it silently truncates everything past
+      that point, since it can't distinguish "the LLM's own subsection heading" from "the Writer's `##
+      Related Pages`/etc. sections." Fixed by introducing `_SECTIONS_SENTINEL` (`<!-- llm-yuki:sections -->`,
+      an HTML comment invisible when rendered) — `_render_*_body` always writes it between content and the
+      Writer's sections, `_extract_content` now splits on the sentinel instead of scanning for a heading
+- [x] **A second real bug, same smoke run**: `_source_description`'s `f"{source_title}: {summary}"` breaks
+      just as badly once `summary` can be multi-line/multi-section — the composed `description` (and the
+      `concepts/index.md`/`sources/index.md` line built from it) ends up containing raw newlines, which
+      breaks the one-bullet-per-page `index.md` format. Fixed with a new `_plain_text_snippet(text,
+      max_chars=160)` helper (strips `#`/`## ` markers, collapses whitespace/newlines to single spaces,
+      truncates with `…`), applied at the single choke point (`_write_type_index`) so it covers every path
+      into an index entry — the deterministic `Source` fallback, the `Concept` `concept_title: summary`
+      fallback, and even a syntactically-valid but instruction-ignoring LLM-supplied `description`
+- [x] New tests: a `Concept.summary` containing its own `## History`/`## Usage` subsections round-trips
+      correctly and the Writer's own `## Key Facts` section is still parsed correctly afterward; a
+      `Source.summary` with subsections produces a single-line flattened `description`; a deliberately
+      multi-line `description` (simulating an LLM that ignored the "one sentence" instruction) still renders
+      as one `index.md` bullet
+- [x] Full `mypy`/`ruff`/`pytest` sweep (151 passed) plus two real CLI runs against a local mock LLM server —
+      the first one is what caught both bugs above (a `sources/index.md` bullet visibly broken across
+      multiple lines); the second, after the fix, confirmed clean single-line `index.md` entries and intact
+      multi-section body content
 
 ## C. Test coverage gaps (ASSUMPTIONS.md §C)
 

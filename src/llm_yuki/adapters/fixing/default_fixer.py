@@ -42,8 +42,10 @@ resolve each issue, using this exact JSON schema:
 }
 
 Include a page only if you are changing it to fix a listed issue, and repeat every field of that page, not \
-just the changed ones — your output fully replaces the current version. Do not include a "key_facts" field \
-on concepts. If you cannot confidently fix an issue, omit that page rather than guessing.
+just the changed ones — your output fully replaces the current version. If a concept's summary already uses \
+markdown "## " subsections, preserve that structure while fixing the unrelated issue — don't flatten it into \
+a single paragraph. Do not include a "key_facts" field on concepts. If you cannot confidently fix an issue, \
+omit that page rather than guessing.
 Return {"claims": [], "concepts": []} if none of the issues can be confidently fixed."""
 
 

@@ -44,8 +44,11 @@ Concept pages as JSON, matching this schema exactly:
 
 Rules:
 - claim_text is a structured assertion, not a verbatim copy of the passage.
-- description is a short one-sentence summary for index listings — distinct from claim_text/summary, which \
-may be longer or more structured.
+- description is always a short one-sentence summary for index listings, regardless of how long/structured \
+claim_text or summary is.
+- concept summary is not limited to one paragraph: use your judgment — plain prose for a simple Concept, or \
+markdown "## " subsections (e.g. "## History", "## Usage") when the topic has multiple distinct facets. \
+Don't force structure onto a Concept that doesn't need it.
 - source_ref must point into this passage (e.g. a document id, optionally "#locator").
 - Do not include a "key_facts" field on concepts — it is maintained separately by the pipeline, not by you.
 - Only reference related_concepts/contradicted_by/related_pages slugs that are either defined in this same \

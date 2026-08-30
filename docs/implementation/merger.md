@@ -100,14 +100,18 @@ def _merge_summary(self, old: str, new: str, batch_id: int) -> str:
   identical, or one is a substring of the other — a substring relationship is treated as pure
   concatenation/extension, which layer 1's `new or old` already handles correctly without an LLM call.
 - **Only when there's a real conflict *and* an `llm_client` is configured** does this call the LLM (system
-  prompt: merge the two summaries into one coherent paragraph, preserving every distinct fact from both).
+  prompt: merge the two summaries into one coherent summary, preserving every distinct fact from both — not
+  capped to one paragraph; if either side already uses markdown `## ` subsections, the prompt asks the LLM to
+  preserve/merge that structure rather than flattening it back into prose, see `entities.py`/`writer.md`).
   Cost recorded as stage `"Merger.summary_merge"`.
 - **Rejection**: if the merged result is shorter than 70% of `max(len(old), len(new))`, it's treated as
   suspected content loss and discarded — the function returns the **old** summary (not `new`), on the theory
   that the previously-persisted value has already survived whatever validation got it written, while a
   drastically-shortened merge output is more likely to have silently dropped facts than to be a genuinely
   better summary. The 70% threshold is borrowed verbatim from `llm_wiki`'s `BODY_SHRINK_THRESHOLD` — not
-  recalibrated against this project's own data (tracked as a known gap).
+  recalibrated against this project's own data (tracked as a known gap). Kept unchanged (character-length
+  percentage, not e.g. a subsection-count check) even after `summary` stopped being capped to one paragraph —
+  a deliberate scope decision, see `TODO.md`'s dated entry.
 - **`llm_client=None` degrades gracefully, not to an error.** `merge()` is called unconditionally on every
   passage (unlike `Fixer.llm_periodic_fix`, which only runs every N batches and can afford to require an LLM
   client), so layer 2 being unavailable just means it's skipped — the function falls back to layer 1's
@@ -163,6 +167,16 @@ def _batch_reduce(self, texts: list[str], batch_id: int, round_number: int) -> s
 - **No round cap.** Deliberately unbounded — an explicit scope decision (D21), tracked as a risk (a document
   producing an extreme number of Claims could spike latency/cost or recurse for a long time; not yet
   validated against real data).
+
+`summary` is not capped to one paragraph (extends beyond D23, see `TODO.md`'s dated entry) — the same system
+prompt (`_SUMMARIZE_SOURCE_SYSTEM_PROMPT`) is used for every round, and covers both cases it's asked to
+handle: round 0 (summarizing raw `claim_text`s) may structure the result with markdown `## ` subsections when
+the source covers multiple distinct facets; a later round (summarizing a batch's *already-structured*
+summaries) is asked to merge matching/related subsections rather than flattening everything back into plain
+prose — effectively an "outline merge," a step up in complexity from round 0's plain summarization. The
+budget check (`_fits_budget`) is unaffected either way — it bounds the *input* `texts` list, not `summary`'s
+output length, so `_SOURCE_BUDGET_CHARS` needs no change; only the final `Source.summary` is expected to grow
+noticeably longer than before for a source with many Claims across several facets.
 
 Every call — whether summarizing raw claim texts or batch summaries — goes through the same
 `_summarize_batch`, recording cost as stage `"Merger.summarize_source"` with a `round` field set to

@@ -242,6 +242,53 @@ def test_source_description_is_deterministic_not_llm_input(tmp_path: Path) -> No
     )
 
 
+def test_source_description_flattens_multi_section_summary(tmp_path: Path) -> None:
+    """summary is not capped to one paragraph — it may use '## ' subsections (see entities.py). description
+    must still collapse to a single flattened line; otherwise a multi-line description would break the
+    one-bullet-per-page index.md format (this was a real bug caught by a manual CLI smoke run)."""
+    writer = MarkdownWriter(tmp_path)
+    structured_summary = "## Overview\nThis document describes the Eiffel Tower.\n\n## Details\nCompleted in 1889."
+    writer.write_source(
+        Source(
+            slug="doc-1",
+            source_title="Doc 1",
+            source_path="raw_sources/doc-1",
+            ingested_at="2026-08-27",
+            summary=structured_summary,
+        )
+    )
+
+    source = writer.read_source("doc-1")
+    assert source is not None
+    assert "\n" not in source.description
+    assert source.description == (
+        "Doc 1: Overview This document describes the Eiffel Tower. Details Completed in 1889."
+    )
+
+    index_lines = (tmp_path / "sources" / "index.md").read_text(encoding="utf-8").splitlines()
+    assert (
+        "- [[doc-1]] — Doc 1: Overview This document describes the Eiffel Tower. Details Completed in 1889."
+        in index_lines
+    )
+
+
+def test_index_entry_flattens_a_multiline_description_regardless_of_source(tmp_path: Path) -> None:
+    """Defense in depth: even an LLM-supplied Claim/Concept.description that ignores the "one sentence"
+    instruction and returns embedded newlines must not break index.md's one-bullet-per-page format."""
+    writer = MarkdownWriter(tmp_path)
+    writer.write_concept(
+        Concept(
+            slug="water",
+            concept_title="Water",
+            summary="A chemical compound.",
+            description="Line one.\nLine two, which should not have been here.",
+        )
+    )
+
+    index_lines = (tmp_path / "concepts" / "index.md").read_text(encoding="utf-8").splitlines()
+    assert "- [[water]] — Line one. Line two, which should not have been here." in index_lines
+
+
 def test_claim_body_renders_related_pages_and_sources_from_frontmatter(tmp_path: Path) -> None:
     writer = MarkdownWriter(tmp_path)
     claim = Claim(
@@ -349,6 +396,30 @@ def test_content_recovers_correctly_around_multiline_paragraphs_and_no_sections(
     read_back = writer.read_concept("water")
     assert read_back is not None
     assert read_back.summary == multiline_summary
+
+
+def test_content_with_own_markdown_subsections_round_trips(tmp_path: Path) -> None:
+    """summary is not capped to one paragraph — it may itself use '## ' subsections (e.g. History/Usage).
+    _extract_content must not confuse those with the Writer's own '## Key Facts'/etc. sections; the sentinel
+    boundary is what makes this possible (a plain first-'## '-wins scan would truncate here)."""
+    writer = MarkdownWriter(tmp_path)
+    structured_summary = "## History\nBuilt in 1889.\n\n## Usage\nA tourist attraction and radio mast."
+    writer.write_concept(Concept(slug="water", concept_title="Water", summary=structured_summary))
+    writer.write_claim(
+        Claim(
+            slug="claim-1",
+            claim_text="Water boils at 100C.",
+            source_ref="doc-1#p1",
+            confidence=0.5,
+            provenance_state="extracted",
+            related_concepts=["water"],
+        )
+    )
+
+    read_back = writer.read_concept("water")
+    assert read_back is not None
+    assert read_back.summary == structured_summary
+    assert read_back.key_facts == ["claim-1"]  # the Writer's own section is still intact and correctly parsed
 
 
 def test_list_pages_returns_all_slugs(tmp_path: Path) -> None:

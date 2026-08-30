@@ -23,15 +23,23 @@ maintained incrementally on every ``write_claim`` call (§2.3.2); as of D21, so 
 ``produced_claims``/``produced_concepts``.
 
 Each type's main free-text field — ``Claim.claim_text``, ``Concept.summary``, ``Source.summary`` — is
-"content," not metadata: it lives only in the body (the paragraph under the ``# <title>`` heading), never
+"content," not metadata: it lives only in the body (the text under the ``# <title>`` heading), never
 duplicated into the YAML frontmatter block. ``read_claim``/``read_concept``/``read_source`` recover it from
 the body via ``_extract_content`` before reconstructing the model. This extends beyond D23's literal text
 (see ``TODO.md``'s dated entry) — everything else (short/structured fields, including the ``description``
 one-liner) stays in frontmatter as before.
+
+``summary`` (``Concept``/``Source``) is not capped to one paragraph — the LLM/batch-reduce may structure it
+with markdown ``## `` subsections when the topic warrants it (see ``entities.py``). Because of that, the
+boundary between "content" and the ``## Related Pages``/etc. sections this module renders afterward can no
+longer be "the first line starting with ``## ``" — a content value's own subsection heading would trip that.
+Instead, ``_SECTIONS_SENTINEL`` (an HTML comment, invisible when the markdown renders) is always written
+between the two; ``_extract_content`` splits on that sentinel instead of scanning for a heading.
 """
 
 from __future__ import annotations
 
+import re
 import typing
 from pathlib import Path
 
@@ -44,34 +52,55 @@ _CLAIMS_DIR = "claims"
 _CONCEPTS_DIR = "concepts"
 _SOURCES_DIR = "sources"
 
+_SECTIONS_SENTINEL = "<!-- llm-yuki:sections -->"
+"""Marks the boundary between a page's free-text "content" and the ``## ...`` sections this module renders
+deterministically afterward (see module docstring) — always written, even when there happen to be no
+sections that batch. An HTML comment: invisible when the markdown is rendered by any normal viewer."""
+
+
+_DESCRIPTION_SNIPPET_MAX_CHARS = 160
+
+
+def _plain_text_snippet(text: str, max_chars: int = _DESCRIPTION_SNIPPET_MAX_CHARS) -> str:
+    """Flatten a (possibly multi-section) markdown text into one plain-text line for use in a
+    ``description`` — strips ``#``/``##`` heading markers (keeping the heading text itself) and collapses all
+    whitespace/newlines to single spaces, then truncates with an ellipsis if still too long. This can't
+    "summarize" semantically (no LLM involved, see ``entities.py`` on why ``Source.description`` must stay
+    deterministic) — it only guarantees the result is a single line, not that it reads well for a very long
+    or heavily-sectioned ``summary``.
+    """
+    flattened = " ".join(re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE).split())
+    if len(flattened) <= max_chars:
+        return flattened
+    return flattened[:max_chars].rsplit(" ", 1)[0] + "…"
+
 
 def _source_description(source: Source) -> str:
-    """Deterministic ``Source.description`` (D23 §5.4) — never LLM output, see ``entities.py``."""
+    """Deterministic ``Source.description`` (D23 §5.4) — never LLM output, see ``entities.py``.
+
+    ``summary`` may now be a multi-section write-up (not capped to one paragraph) — flattened via
+    ``_plain_text_snippet`` so ``description`` stays what its name promises: one line, for ``index.md``.
+    """
     if not source.summary:
         return source.source_title
-    return f"{source.source_title}: {source.summary}"
+    return f"{source.source_title}: {_plain_text_snippet(source.summary)}"
 
 
 def _extract_content(body: str) -> str:
     """Recover the free-text "content" field (``Claim.claim_text`` / ``Concept.summary`` / ``Source.summary``)
-    from a rendered body — the paragraph directly under the ``# <title>`` heading, up to the first ``## ...``
-    subsection (or end of body if there is none). Content lives only in the body, never duplicated in
-    frontmatter (see module docstring) — this is the inverse of ``_render_*_body``'s first four lines.
+    from a rendered body — everything between the ``# <title>`` heading and ``_SECTIONS_SENTINEL``. Content
+    lives only in the body, never duplicated in frontmatter (see module docstring) — this is the inverse of
+    ``_render_*_body``'s first several lines.
 
-    A content value that itself contains a line starting with ``## `` would be truncated early — not handled
-    specially, since neither ``claim_text`` (a short structured assertion) nor ``summary`` (LLM/batch-reduce
-    prose) is expected to contain markdown headings.
+    A content value that itself contains the literal sentinel string would be truncated early — not expected
+    in practice (it's an internal implementation detail no prompt ever mentions to the LLM).
     """
-    lines = body.split("\n")
+    before_sentinel, _, _ = body.partition(_SECTIONS_SENTINEL)
+    lines = before_sentinel.split("\n")
     start = next((i + 1 for i, line in enumerate(lines) if line.startswith("# ")), None)
     if start is None:
-        return body.strip()
-    content_lines: list[str] = []
-    for line in lines[start:]:
-        if line.startswith("## "):
-            break
-        content_lines.append(line)
-    return "\n".join(content_lines).strip()
+        return before_sentinel.strip()
+    return "\n".join(lines[start:]).strip()
 
 
 class MarkdownWriter(Writer):
@@ -197,7 +226,7 @@ class MarkdownWriter(Writer):
 
     @staticmethod
     def _render_claim_body(claim: Claim) -> str:
-        lines = [f"# {claim.slug}", "", claim.claim_text, ""]
+        lines = [f"# {claim.slug}", "", claim.claim_text, "", _SECTIONS_SENTINEL, ""]
         if claim.related_concepts:
             lines.append("## Related Pages")
             lines.extend(f"- [[{slug}]]" for slug in claim.related_concepts)
@@ -210,7 +239,7 @@ class MarkdownWriter(Writer):
 
     @staticmethod
     def _render_concept_body(concept: Concept) -> str:
-        lines = [f"# {concept.concept_title}", "", concept.summary, ""]
+        lines = [f"# {concept.concept_title}", "", concept.summary, "", _SECTIONS_SENTINEL, ""]
         if concept.key_facts:
             lines.append("## Key Facts")
             lines.extend(f"- [[{slug}]]" for slug in concept.key_facts)
@@ -227,7 +256,7 @@ class MarkdownWriter(Writer):
 
     @staticmethod
     def _render_source_body(source: Source) -> str:
-        lines = [f"# {source.source_title}", "", source.summary, ""]
+        lines = [f"# {source.source_title}", "", source.summary, "", _SECTIONS_SENTINEL, ""]
         if source.produced_claims:
             lines.append("## Produced Claims")
             lines.extend(f"- [[{slug}]]" for slug in source.produced_claims)
@@ -337,8 +366,11 @@ class MarkdownWriter(Writer):
         return entries
 
     def _write_type_index(self, dir_name: str, label: str, entries: list[tuple[str, str]]) -> None:
+        # _plain_text_snippet guards every entry here, not just the deterministic Source fallback — an
+        # index.md line must stay one line no matter what produced the description (LLM output that ignores
+        # the "one sentence" instruction, or a fallback built from a now-possibly-multi-section summary).
         lines = [f"# {label} Index", ""]
-        lines.extend(f"- [[{slug}]] — {description}" for slug, description in entries)
+        lines.extend(f"- [[{slug}]] — {_plain_text_snippet(description)}" for slug, description in entries)
         lines.append("")
         (self._root / dir_name / "index.md").write_text("\n".join(lines), encoding="utf-8")
 

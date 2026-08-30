@@ -61,6 +61,8 @@ description: Water's boiling point at sea level.
 
 Water boils at 100C at sea level.
 
+<!-- llm-yuki:sections -->
+
 ## Related Pages
 - [[water]]
 
@@ -76,13 +78,20 @@ literal text, see `TODO.md`'s dated entry): it lives only in the body, right und
 never duplicated into YAML. Everything else (short/structured fields, including `description`, the one-line
 index blurb) stays in frontmatter as before.
 
+`Concept.summary`/`Source.summary` are not capped to one paragraph (see `entities.py`) — the LLM/batch-reduce
+may structure them with their own markdown `## ` subsections (e.g. `## History`, `## Usage`) when a topic
+warrants it. That means "the content ends at the first `## ` line" is no longer a safe rule — a content
+value's own subsection heading would trip it. `_SECTIONS_SENTINEL` (the HTML comment
+`<!-- llm-yuki:sections -->` above — invisible when the markdown renders) is always written between content
+and the Writer's own sections, precisely so the two can never be confused regardless of what content contains.
+
 `read_claim`/`read_concept`/`read_source` parse the frontmatter block back out with `yaml.safe_load`, then
-recover the content field from the body via `_extract_content` (scans from the `# <title>` line to the first
-`## ...` subsection, or end of body) and merge it into the frontmatter dict *before* reconstructing the model
-via `Model.model_validate(frontmatter)` — the content field would otherwise be missing and fail Pydantic
-validation. A missing file returns `None`, never raises. `_extract_content` doesn't handle a content value
-that itself contains a line starting with `## ` — not expected in practice (`claim_text` is a short structured
-assertion, `summary` is prose without markdown headings), but worth knowing if this ever needs an escape hatch.
+recover the content field from the body via `_extract_content` (everything between the `# <title>` line and
+`_SECTIONS_SENTINEL`) and merge it into the frontmatter dict *before* reconstructing the model via
+`Model.model_validate(frontmatter)` — the content field would otherwise be missing and fail Pydantic
+validation. A missing file returns `None`, never raises. The one thing `_extract_content` still can't handle
+is a content value that itself contains the literal sentinel string — not expected in practice, since it's an
+internal implementation detail no prompt ever mentions to the LLM.
 
 ## Body rendering — deterministic, never LLM-generated
 
@@ -97,9 +106,13 @@ content field (`claim_text`/`summary`) is always the first thing rendered, right
 
 | Type | Body sections (in order) |
 |---|---|
-| `Claim` | title, `claim_text`, `## Related Pages` (from `related_concepts`, if any), `## Related Sources` (from `source_ref`, if non-empty) |
-| `Concept` | title, `summary`, `## Key Facts` (from `key_facts`), `## Related Pages` (from `related_pages`), `## Related Sources` (from `related_sources`) |
-| `Source` | title, `summary`, `## Produced Claims`, `## Produced Concepts`, `## Related Pages`, `## Source` (always rendered — `source_path`) |
+| `Claim` | title, `claim_text`, `_SECTIONS_SENTINEL`, `## Related Pages` (from `related_concepts`, if any), `## Related Sources` (from `source_ref`, if non-empty) |
+| `Concept` | title, `summary`, `_SECTIONS_SENTINEL`, `## Key Facts` (from `key_facts`), `## Related Pages` (from `related_pages`), `## Related Sources` (from `related_sources`) |
+| `Source` | title, `summary`, `_SECTIONS_SENTINEL`, `## Produced Claims`, `## Produced Concepts`, `## Related Pages`, `## Source` (always rendered — `source_path`) |
+
+`_SECTIONS_SENTINEL` is always written, even when every section after it is empty (a `Claim`/`Concept` with
+nothing to link to still gets the sentinel, just nothing following it) — this keeps `_extract_content`'s
+boundary rule unconditional, with no "only if there are sections" special case.
 
 ## Incremental backlink maintenance (§2.3.2, D18/D21)
 
@@ -185,11 +198,22 @@ it's the same field already persisted on the page:
 |---|---|---|
 | `Claim` | LLM output, alongside `claim_text` | `claim_text` itself |
 | `Concept` | LLM output, alongside `summary` | `f"{concept_title}: {summary}"` |
-| `Source` | `MarkdownWriter._write_source_file`, deterministically, on every write — never LLM output (see `core-types.md`) | `source_title` alone, or `f"{source_title}: {summary}"` once `summary` is non-empty (`_source_description`) |
+| `Source` | `MarkdownWriter._write_source_file`, deterministically, on every write — never LLM output (see `core-types.md`) | `source_title` alone, or `f"{source_title}: {_plain_text_snippet(summary)}"` once `summary` is non-empty (`_source_description`) |
 
 `_claim_index_entries`/`_concept_index_entries`/`_source_index_entries` each read `description or <fallback>`
 — so a page written before this field existed still gets a usable index entry, it just isn't the
 LLM-authored one-liner.
+
+**Every entry is flattened through `_plain_text_snippet` in `_write_type_index` before being written** — this
+is the actual bug fix that makes any of the above safe now that `summary` can span multiple `## `
+subsections: naively embedding a multi-line `description`/fallback into `f"- [[{slug}]] — {description}"`
+would break `index.md`'s one-bullet-per-page format (this was caught by a real CLI smoke run against a
+`Source.summary` with subsections, before this flattening step existed — `f"{source_title}: {summary}"`
+produced a `description` containing raw newlines). `_plain_text_snippet` strips `#`/`## ` heading markers
+(keeping the heading text), collapses all whitespace/newlines to single spaces, and truncates with `…` past
+160 characters. It applies uniformly — to the deterministic `Source` fallback, the `Concept`
+`concept_title: summary` fallback, and even a syntactically-valid but instruction-ignoring LLM `description`
+that happens to contain a newline — so `index.md` stays well-formed no matter what produced the text.
 
 The root `index.md` is a fixed three-block template — `# Claims` / `# Concepts` / `# Sources`, each linking
 to that subdirectory's `index.md` — it never lists individual pages itself, matching OKF's progressive

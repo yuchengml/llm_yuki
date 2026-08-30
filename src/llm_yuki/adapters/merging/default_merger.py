@@ -44,8 +44,11 @@ _SUMMARY_REJECTION_RATIO = 0.7
 _MERGE_SUMMARY_SYSTEM_PROMPT = """\
 You are the summary-merge step of a wiki-compilation pipeline. You are given the existing summary of a \
 Concept page and a new candidate summary describing the same Concept, drawn from a different source passage. \
-Merge them into a single, coherent one-paragraph summary that preserves every distinct fact from both — do \
-not drop information from either side. Respond with the merged summary text only, no extra commentary."""
+Merge them into a single, coherent summary that preserves every distinct fact from both — do not drop \
+information from either side. Summaries are not limited to one paragraph: if either side uses markdown \
+"## " subsections, preserve that structure in the merged result — combine matching or closely related \
+subsections rather than flattening everything back into plain prose. If neither side has subsections, a \
+plain paragraph (or a few) is fine. Respond with the merged summary text only, no extra commentary."""
 
 _SOURCE_BUDGET_CHARS = 6000
 """Fixed-ratio quota per batch-reduce call — spirit borrowed from ``llm_wiki``'s ``context-budget.ts`` (D21),
@@ -54,8 +57,13 @@ not a token-accurate count. Not recalibrated against real corpus data (ASSUMPTIO
 _SUMMARIZE_SOURCE_SYSTEM_PROMPT = """\
 You are the Source.summary generation step of a wiki-compilation pipeline (recursive batch-reduce). You are \
 given a list of facts about one source document — either its extracted Claims, or summaries produced by an \
-earlier reduction round over batches of those Claims. Write a single coherent one-paragraph summary that \
-captures every distinct fact from the list. Respond with the summary text only, no extra commentary."""
+earlier reduction round over batches of those Claims. Write a coherent summary that captures every distinct \
+fact from the list. Summaries are not limited to one paragraph: if the source covers multiple distinct \
+facets (e.g. background, findings, implications), structure the summary with markdown "## " subsections — a \
+plain paragraph is fine for a source with few, closely related facts. If the input list is itself made of \
+earlier-round summaries that already use "## " subsections, merge matching or closely related subsections \
+together rather than flattening everything back into plain prose. Respond with the summary text only, no \
+extra commentary."""
 
 
 class DefaultMerger(Merger):
