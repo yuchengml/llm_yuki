@@ -12,6 +12,7 @@ parent directory — real environment variables always take precedence over it.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -20,13 +21,22 @@ from dotenv import find_dotenv, load_dotenv
 from llm_yuki.adapters.connectors.txt_file_connector import TxtFileConnector
 from llm_yuki.adapters.cost_ledger import JsonlCostLedger
 from llm_yuki.adapters.fixing.default_fixer import DefaultFixer
+from llm_yuki.adapters.llm.answer_synthesizer import LLMAnswerSynthesizer
 from llm_yuki.adapters.llm.client import LLMConfigError, OpenAICompatibleClient
 from llm_yuki.adapters.llm.extractor import LLMExtractor
+from llm_yuki.adapters.llm.next_action_decider import LLMActionDecider
 from llm_yuki.adapters.merging.default_merger import DefaultMerger
 from llm_yuki.adapters.state.error_book_store import YamlErrorBookStore
 from llm_yuki.adapters.validation.default_validator import DefaultValidator
 from llm_yuki.adapters.writers.markdown_writer import MarkdownWriter
 from llm_yuki.domain.pipeline import Orchestrator
+from llm_yuki.domain.query import (
+    IterativeAgenticQueryEngine,
+    QueryEngine,
+    SinglePassQueryEngine,
+    StructuredSignalSearch,
+)
+from llm_yuki.evaluation.qa_runner import load_qa_examples, run_qa_evaluation
 from llm_yuki.logging import configure_logging, get_logger
 
 logger = get_logger(__name__)
@@ -57,6 +67,52 @@ def build_parser() -> argparse.ArgumentParser:
         help="Max concurrent Phase 1 (SelectPages/CompileWikiPages) extraction calls (D12). Default: 4.",
     )
 
+    query_parser = subparsers.add_parser("query", help="Answer one question against an existing OKF bundle (D25).")
+    query_parser.add_argument("bundle_dir", type=Path, help="OKF bundle directory to read (never written to).")
+    query_parser.add_argument("question", type=str, help="The question to answer.")
+    query_parser.add_argument(
+        "--method",
+        choices=("single-pass", "agentic"),
+        default="single-pass",
+        help="'single-pass': search->fuse->graph-expand->read->synthesize, once (default). "
+        "'agentic': iterative wiki_search/wiki_read loop with T_max/patience termination (D25).",
+    )
+    query_parser.add_argument("--top-k", type=int, default=8, help="Max pages considered for the answer. Default: 8.")
+    query_parser.add_argument("--batch-id", type=int, default=1, help="Batch identifier for cost-ledger recording.")
+    query_parser.add_argument(
+        "--pipeline-state-dir",
+        type=Path,
+        default=None,
+        help="Directory for pipeline-internal state (cost_ledger.jsonl). Defaults to a 'pipeline-state' "
+        "sibling of bundle_dir.",
+    )
+    query_parser.add_argument(
+        "--t-max", type=int, default=6, help="Agentic method only: max tool calls before stopping. Default: 6."
+    )
+    query_parser.add_argument(
+        "--patience",
+        type=int,
+        default=2,
+        help="Agentic method only: consecutive empty searches before stopping. Default: 2.",
+    )
+
+    eval_parser = subparsers.add_parser(
+        "evaluate-qa", help="Run a QueryEngine over a QA JSONL against an existing OKF bundle and report EM/F1 (D8)."
+    )
+    eval_parser.add_argument("bundle_dir", type=Path, help="OKF bundle directory to read (never written to).")
+    eval_parser.add_argument(
+        "qa_path", type=Path, help="QA pairs JSONL — one {'question': ..., 'answers'|'answer': ...} per line."
+    )
+    eval_parser.add_argument("--method", choices=("single-pass", "agentic"), default="single-pass")
+    eval_parser.add_argument("--top-k", type=int, default=8)
+    eval_parser.add_argument("--batch-id", type=int, default=1)
+    eval_parser.add_argument("--pipeline-state-dir", type=Path, default=None)
+    eval_parser.add_argument("--t-max", type=int, default=6)
+    eval_parser.add_argument("--patience", type=int, default=2)
+    eval_parser.add_argument(
+        "--output", type=Path, default=None, help="Optional path to write the full JSON report (EM/F1 + every example)."
+    )
+
     return parser
 
 
@@ -72,6 +128,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "compile":
         pipeline_state_dir = args.pipeline_state_dir or (args.bundle_dir.parent / "pipeline-state")
         return _run_compile(args.source_dir, args.bundle_dir, pipeline_state_dir, args.batch_id, args.max_workers)
+
+    if args.command == "query":
+        pipeline_state_dir = args.pipeline_state_dir or (args.bundle_dir.parent / "pipeline-state")
+        return _run_query(args, pipeline_state_dir)
+
+    if args.command == "evaluate-qa":
+        pipeline_state_dir = args.pipeline_state_dir or (args.bundle_dir.parent / "pipeline-state")
+        return _run_evaluate_qa(args, pipeline_state_dir)
 
     raise AssertionError(f"unhandled command: {args.command}")  # unreachable: argparse enforces required=True
 
@@ -112,6 +176,84 @@ def _run_compile(source_dir: Path, bundle_dir: Path, pipeline_state_dir: Path, b
     orchestrator.run_batch(batch_id)
     error_book_store.save(error_book)
     logger.info("compile finished: batch_id=%d", batch_id)
+    return 0
+
+
+def _build_query_engine(
+    args: argparse.Namespace, llm_client: OpenAICompatibleClient, cost_ledger: JsonlCostLedger
+) -> QueryEngine:
+    """Assemble the ``QueryEngine`` (D25) named by ``args.method`` — shared by ``query`` and ``evaluate-qa``."""
+    if args.method == "single-pass":
+        return SinglePassQueryEngine(
+            strategies=[StructuredSignalSearch()],
+            synthesizer=LLMAnswerSynthesizer(llm_client, cost_ledger),
+        )
+    return IterativeAgenticQueryEngine(
+        strategy=StructuredSignalSearch(),
+        decider=LLMActionDecider(llm_client, cost_ledger, args.batch_id),
+        synthesizer=LLMAnswerSynthesizer(llm_client, cost_ledger),
+        t_max=args.t_max,
+        patience=args.patience,
+    )
+
+
+def _run_query(args: argparse.Namespace, pipeline_state_dir: Path) -> int:
+    """Wire a ``QueryEngine`` (D25) together and answer one question, read-only against ``bundle_dir``."""
+    try:
+        llm_client = OpenAICompatibleClient.from_env()
+    except LLMConfigError as exc:
+        logger.error("LLM configuration error: %s", exc)
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    logger.info(
+        "starting query: bundle_dir=%s method=%s top_k=%d batch_id=%d",
+        args.bundle_dir,
+        args.method,
+        args.top_k,
+        args.batch_id,
+    )
+
+    writer = MarkdownWriter(args.bundle_dir)
+    cost_ledger = JsonlCostLedger(pipeline_state_dir)
+    engine = _build_query_engine(args, llm_client, cost_ledger)
+
+    result = engine.answer(args.question, writer, args.batch_id, top_k=args.top_k)
+    print(result.answer)
+    print()
+    print(f"Cited pages: {', '.join(result.cited_slugs) if result.cited_slugs else '(none)'}")
+    logger.info("query finished: method=%s cited=%d page(s)", result.method, len(result.cited_slugs))
+    return 0
+
+
+def _run_evaluate_qa(args: argparse.Namespace, pipeline_state_dir: Path) -> int:
+    """Run a ``QueryEngine`` (D25) over ``qa_path``'s QA pairs against ``bundle_dir`` and report EM/F1 (D8)."""
+    try:
+        llm_client = OpenAICompatibleClient.from_env()
+    except LLMConfigError as exc:
+        logger.error("LLM configuration error: %s", exc)
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    examples = load_qa_examples(args.qa_path)
+    logger.info(
+        "starting evaluate-qa: bundle_dir=%s qa_path=%s method=%s examples=%d",
+        args.bundle_dir,
+        args.qa_path,
+        args.method,
+        len(examples),
+    )
+
+    writer = MarkdownWriter(args.bundle_dir)
+    cost_ledger = JsonlCostLedger(pipeline_state_dir)
+    engine = _build_query_engine(args, llm_client, cost_ledger)
+
+    report = run_qa_evaluation(examples, engine, writer, batch_id=args.batch_id, top_k=args.top_k)
+    print(f"method={report.method} count={report.count} exact_match={report.exact_match:.4f} f1={report.f1:.4f}")
+    if args.output is not None:
+        args.output.write_text(json.dumps(report.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
+        print(f"Full report written to {args.output}")
+    logger.info("evaluate-qa finished: exact_match=%.4f f1=%.4f", report.exact_match, report.f1)
     return 0
 
 

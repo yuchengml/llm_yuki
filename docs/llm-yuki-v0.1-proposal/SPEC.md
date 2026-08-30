@@ -21,6 +21,7 @@ Date: 2026-08-26
 - `Merger` 的合併機制含三層保護(陣列聯集/LLM合併+70%長度比例拒絕/鎖定欄位,D22),但軟碰撞去重(命名不同的同一實體偵測)只做架構設計,這次不實作
 - deepagents 的 skill 抽換機制(見 `ASSUMPTIONS.md` B-1)列為未查證假設,`analysis.md` 延後,這次 POC 的 `Connector`/`Extractor`/`Writer` 具體實作一律用內建程式碼,不驗證 skill 抽換本身是否可行
 - 成本統計(`cost_ledger.jsonl`,見 `ARCHITECTURE.md` 第 7 節)只做被動記錄與事後分析,不做主動的成本上限/預算警報 governance
+- Query(查詢)採可插拔多策略檢索:結構化訊號優先的關鍵字搜尋 + 一跳 wikilink 圖擴展皆實作,embedding 語意檢索只定義介面、這次 POC 不實作;單次融合(`SinglePassQueryEngine`)與 agentic 迭代(`IterativeAgenticQueryEngine`,`T_max`/耐心閾值終止)兩種查詢方法都做;答案一律附引用;查詢結果不寫回 wiki(D25)
 
 完整範疇侷限與未查證假設清單見 `ASSUMPTIONS.md`。實作架構細節見 `ARCHITECTURE.md`。
 

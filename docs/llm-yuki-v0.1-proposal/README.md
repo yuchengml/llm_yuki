@@ -685,6 +685,33 @@ D21/D22/D23 的決議實質內容(欄位設計、遞迴 batch-reduce 演算法�
 
 ---
 
+### D25. Query 模組:可插拔多策略檢索(結構化訊號 + 圖擴展),embedding 列為未實作的架構占位,單次融合 + agentic 迭代兩種查詢方法皆做(2026-08-30)
+
+**背景**:`docs/llm-yuki-v0.1-proposal/QUERY-SEARCH-SURVEY.md` 這份調查文件發現一個實際缺口——D1–D24 全部是 Ingest/Compile/Lint 三循環的決議,呼應 Karpathy 原始模式三循環之二,但「Query(查詢)」這第三個循環從沒被正式調查過,`ARCHITECTURE.md` 也沒有對應模組。D8 的成功判準(拿 `M3SciQA`/`MMDocRAG` 的 QA pairs 算正確率/F1、跟向量 RAG 比較)技術上需要一套查詢機制才能執行——這條決議把調查文件§7 留下的三個開放問題拍板,補上這個模組。
+
+**決議**:
+
+1. **檢索訊號:結構化訊號優先的關鍵字搜尋(必做)+ 一跳 wikilink 圖擴展(必做)+ embedding 語意檢索(介面定義,這次 POC 明確不實作)**。呼應調查文件第 6 節「收斂出的共識」——`nashsu/llm_wiki`(關鍵字+向量+圖擴展,RRF 融合)與 `atomicstrata/llm-wiki-compiler`(語意 chunk+BM25+圖擴展)兩個獨立實作都收斂到「結構化/關鍵字 + 語意 + 圖」三訊號混合,以及 LLM-Wiki 論文 `wiki_search` 的敘述(「先比對結構化 metadata,比不到才退到全文比對」)。這次 POC 只做其中兩訊號:
+   - `StructuredSignalSearch`:比照論文 `wiki_search` 的訊號優先序——先比對頁面 title/aliases/tags/description,查無才退到 body 全文(`claim_text`/`summary`),不是一開始就做語意相似度。
+   - 圖擴展:以檢索到的種子頁面為起點,沿 `related_concepts`/`related_pages`/`key_facts`/`produced_claims`/`produced_concepts` 這些既有 wikilink 欄位(D9/D18/D21 backlink 機制)做一跳擴展,鄰居分數依種子名次加權——借用 `nashsu/llm_wiki` 的 `blend_graph_results`/`graph_result_quota` 精神(向量覆蓋率越低,圖擴展佔比越高,15%–30% 動態配額),但這裡沒有向量訊號,配額固定取上限。
+   - **embedding 語意檢索明確不實作**:定義好 `SearchStrategy` 抽象介面讓它可以之後無痛插入(呼應 D16 對 skill 抽換、D22 對軟碰撞去重的「架構留位置,不實作」處理方式),但這次 POC 的具體類別只丟出明確的「未實作」錯誤,不接任何 embedding provider。**這是使用者本次直接指示的範疇縮減**,也呼應 D4/D7 一路的 minimal-scope 紀律——embedding 需要額外的向量索引/embedding provider 依賴,不是驗證「編譯式 wiki 查詢方法論本身」的必要條件。
+2. **查詢流程:單次融合檢索(baseline)與 agentic 迭代檢索(呼應論文核心論點)兩種都做,列為可替換的頂層 `QueryEngine`**。呼應調查文件第 6 節「查詢流程」對照——Karpathy gist 的 `search→read→synthesize` 是最簡單的一次性做法,LLM-Wiki 論文的核心論點是「agentic 迭代(search→read→追連結→判斷夠不夠)優於一次性 top-k」,`nashsu/llm_wiki` 用一組 agent tool(`wiki.search`/`wiki.read_page`/`graph.search`)讓 LLM 自主決定呼叫順序來實現這個論點:
+   - `SinglePassQueryEngine`:一次性——跑過所有啟用的 `SearchStrategy`、用 Reciprocal Rank Fusion(RRF,借用 `nashsu/llm_wiki` 的融合公式)合併排名、做一跳圖擴展、讀回 top-k 頁面全文、交給 LLM 綜合回答。這是最簡單的對照組,角色類似論文對照的「fixed top-k context」做法,但用的是我們自己的多訊號融合而非單一向量相似度。
+   - `IterativeAgenticQueryEngine`:多跳迭代——直接依論文敘述重建的 pseudocode(調查文件第 2 節)實作:LLM 每輪決定下一步呼叫 `wiki_search`(結構化訊號搜尋)或 `wiki_read`(批次讀頁,讀到的內容含連結,可當下一跳線索),終止條件三選一(累積證據充分/`tool_call` 次數達 `T_max`/連續空搜尋次數達耐心閾值 `P`),最後綜合回答。這是這次 POC 用來驗證論文核心論點(agentic 迭代優於一次性檢索)的具體實作,直接對應 D8 的「跟簡單向量 RAG 比回答品質」——因為我們自己沒做 embedding,`SinglePassQueryEngine` 某種程度上先扮演「簡化版」的己方對照組,`IterativeAgenticQueryEngine` 是這套方法論真正想驗證的做法。
+   - 兩者共用同一組底層積木(`SearchStrategy`/RRF 融合/圖擴展/`Writer` 讀回),只是頂層迴圈形狀不同——呼應 D16「Skill 作為任一角色的可替換實作策略」的模組化精神,`QueryEngine` 本身也設計成可替換的抽象。
+3. **答案一律要求附引用(Citations),不強制**:呼應調查文件第 6 節對照表「答案要求」一欄——Karpathy gist 明確要求引用,`nashsu/llm_wiki`/`llm-wiki-compiler` 也都有對應機制(citation chips)。這裡採用**必須**(不是像 `nashsu/llm_wiki` 那樣由 agent 自行決定):`AnswerSynthesizer` 的輸出型別除了回答文字,固定帶一個「引用了哪些頁面 slug」的欄位,這也是 D7 精神的延伸(可稽核性優先)。
+4. **查詢結果明確不寫回 wiki,這次 POC 範疇排除**:Karpathy gist 的「好答案歸檔回 wiki」、`nashsu/llm_wiki` 的 `query`/`synthesis` 頁面型別、`llm-wiki-compiler` 的 `--save` flag,三個參照都支援這個功能,但這次不做——寫回會需要在 D9 的型別系統上再加一個新核心型別(或至少決定要不要沿用 `Concept`),牽動 D6 的 OKF conformance(新頁面也要合規)與 D7 的驗證範疇,而 D8 的成功判準本身只要求「檢索/推理正確性」與「跟向量 RAG 比回答品質」,不需要查詢結果能寫回才能驗證。呼應 D4/D7 一路的 minimal-scope 紀律,列為明確的範疇侷限,不是遺漏。
+
+**理由**:調查文件本身把這件事定位成「留給 README.md 之後開一條新決議(暫定 D25)」,所以這裡直接接續調查文件的證據做出決議,不是憑空設計——上面四點分別對應調查文件第 6 節對照表的四個維度(檢索訊號、查詢流程、答案要求、結果寫回)。同時遵守 AGENTS.md「Explicit Over Implicit」原則:Query 模組在 D25 之前完全沒有決議記錄,不能在沒有決議的情況下直接寫 code。
+
+**跟核心型別(D9/D21)的關係**:查詢時讀回的頁面全文用既有的 `Claim`/`Concept`/`Source` 三型別(`Writer.read_claim`/`read_concept`/`read_source`),不需要新型別——`StructuredSignalSearch`/圖擴展操作的「頁面記錄」是從這三型別攤平出來的唯讀快照(`title`/`aliases`/`tags`/`description`/`content`/`links` 這幾個共通欄位),不是新的 OKF frontmatter 型別。
+
+**明確排除**:embedding 檢索的具體實作(見決議1)、查詢結果寫回 wiki(見決議4)、查詢延遲的正式 SLA(調查文件開放問題 4 提過「查詢延遲/token 成本要不要納入指標」,這裡仍不決議,留給 `cost_ledger` 的既有機制被動記錄)、對兩個以上 `QueryEngine` 做量化吞吐量對照(兩種查詢方法都做是為了都能拿去驗證,不是為了比較兩者本身的效能差異)。
+
+**影響**:`ARCHITECTURE.md` 新增 Query 模組章節(模組架構、`SearchStrategy`/`QueryEngine` 介面、執行流程);`ASSUMPTIONS.md` §A 新增「embedding 檢索未實作」「查詢結果不寫回 wiki」兩條範疇侷限;root `ARCHITECTURE.md` 模組地圖新增 Query 相關的 domain/adapters 條目;`TODO.md` 新增這次實作的追蹤項目。D8/§6.2 的「檢索/推理端正確性」驗證,技術上現在可以真正執行——後續驗證跑 `M3SciQA`/`MMDocRAG` 真實語料時,`IterativeAgenticQueryEngine` 的 `T_max`/`P` 具體數字比照 D15/B-5 的既有精神(留給 scaffolding 依實測基準線調整,不在決議時鎖定)。
+
+---
+
 ## 執行方式總覽(把 D1–D24 串成一條 pipeline)
 
 這不是新決議,只是把散落在 D1–D24 的執行手法,依 pipeline 的四個階段重新排一遍,方便下一步直接對照著寫 `SPEC.md`。**模組/抽象邊界的架構圖見 D16**:下面四階段對應到 D16 的 `Connector`(階段1)→`Extractor`/`Merger`(階段2)→`Validator`/`ErrorBook`/`Fixer`(階段3)→`Writer`(貫穿階段2/3 的持久化)。

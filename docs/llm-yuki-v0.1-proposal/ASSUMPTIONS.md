@@ -34,6 +34,10 @@
 
 14. **`index.md` 分層深度只到核心型別這一層,不做更深的巢狀分層**(D23)。OKF spec 允許 index.md 出現在任意目錄深度,但這次 POC 只分到 `claims/`/`concepts/`/`sources/` 三個子目錄各一份 index,沒有再往下細分的必要性可言,是刻意收斂範疇,不是遺漏。
 
+15. **`EmbeddingSearch` 只定義介面,這次 POC 不實作任何 embedding provider**(D25)。`SearchStrategy` 抽象介面留了位置(比照 D16 對 skill 抽換、D22 對軟碰撞去重的「架構留位置,不實作」處理方式),但呼叫 `adapters/query/embedding_search.py::EmbeddingSearch.search()` 會直接拋 `NotImplementedError`——不接任何向量索引或 embedding API。Query 模組這次 POC 只靠 `StructuredSignalSearch`(結構化訊號優先的關鍵字搜尋)+ 一跳圖擴展兩個訊號。
+
+16. **查詢結果不寫回 wiki,`QueryEngine` 是唯讀操作**(D25)。Karpathy gist 的「好答案歸檔回 wiki」、`nashsu/llm_wiki` 的 `query`/`synthesis` 頁面型別、`llm-wiki-compiler` 的 `--save` flag 這三個參照都支援這個功能,這次 POC 刻意不做——避免在 D9 型別系統上另外決定要不要加新核心型別,`QueryEngine.answer` 只接受 `Writer` 用來讀,不呼叫任何 `write_*` 方法。
+
 ---
 
 ## B. 未查證的假設(需要在 scaffolding 時特別留意,可能推翻既有決議)

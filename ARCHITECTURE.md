@@ -67,6 +67,14 @@ flowchart LR
   typed-frontmatter types every domain uses (D9, D21). `Source` is a per-Raw-Source navigation page
   (`slug` = the source's id), distinct from `Claim.source_ref` (which still points *out* of the wiki to the
   Raw Source itself, D17) — see proposal `ARCHITECTURE.md` §1.5.
+- `domain/query.py` (D25, proposal `ARCHITECTURE.md` §8): the third Karpathy circle — Query — read-only
+  against `Writer`, never writes. `SearchStrategy`/`AnswerSynthesizer`/`NextActionDecider` ABCs plus
+  `StructuredSignalSearch` (the one non-stub retrieval signal this POC ships), `reciprocal_rank_fusion`,
+  one-hop `expand_via_wikilinks`, and two swappable top-level `QueryEngine`s — `SinglePassQueryEngine`
+  (search → fuse → graph-expand → read → synthesize, single pass) and `IterativeAgenticQueryEngine`
+  (multi-hop `wiki_search`/`wiki_read` loop with `T_max`/patience termination, per the LLM-Wiki paper).
+  Embedding-based retrieval is an explicit, undone architecture placeholder (D25) — see
+  `adapters.query.embedding_search.EmbeddingSearch`.
 
 ### 2.2 `llm_yuki.ports` — abstract interfaces
 
@@ -92,6 +100,12 @@ flowchart LR
 - `adapters.fixing.default_fixer.DefaultFixer`: `Fixer` — deterministic auto-fix + LLM-backed periodic fix
 - `adapters.state.error_book_store.YamlErrorBookStore`: persists `ErrorBook` to `pipeline-state/error_book.yaml`
 - `adapters.cost_ledger.JsonlCostLedger`: append-only `pipeline-state/cost_ledger.jsonl` cost recorder (D19)
+- `adapters.query.embedding_search.EmbeddingSearch`: `SearchStrategy` stub — raises `NotImplementedError`,
+  deliberately unimplemented this POC (D25)
+- `adapters.llm.answer_synthesizer.LLMAnswerSynthesizer`: LLM-backed `AnswerSynthesizer` — answer + mandatory
+  citations (D25)
+- `adapters.llm.next_action_decider.LLMActionDecider`: LLM-backed `NextActionDecider` for
+  `IterativeAgenticQueryEngine`'s per-round `wiki_search`/`wiki_read`/stop decision (D25)
 
 ---
 
@@ -126,4 +140,16 @@ Pipeline execution is exposed as a **CLI first** — `llm_yuki.cli` (installed a
 subcommand wires every concrete adapter (§2.3) into a real `Orchestrator` and runs one batch end to end;
 `--max-workers` (default 4) caps Phase 1's concurrency (D12); missing/invalid LLM configuration
 (`OPENAI_API_KEY`/`OPENAI_BASE_URL`/`LLM_MODEL`) fails fast at startup with a clear error, before any batch
-work starts, rather than partway through one.
+work starts, rather than partway through one. The `query` subcommand (D25) reads an existing `bundle_dir`
+(no write access) and answers one question via `--method single-pass` (default) or `--method agentic`,
+printing the answer and its cited page slugs. The `evaluate-qa` subcommand (D5/D8) runs a `QueryEngine` over a
+QA-pairs JSONL against an existing `bundle_dir` and reports aggregate exact-match/F1.
+
+---
+
+## 6. Evaluation Tooling
+
+`llm_yuki.evaluation` (`qa_metrics.py`/`qa_runner.py`) sits outside the Ports & Adapters split above — it is
+QA-evaluation tooling built on top of the Query module (§2.1), not core pipeline logic, the same top-level
+status `cli.py` already has. It does not vendor any benchmark dataset; see
+`docs/implementation/evaluation.md` for what a real `M3SciQA`/`MMDocRAG` run still requires.

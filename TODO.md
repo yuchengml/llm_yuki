@@ -438,6 +438,64 @@ there is no D-number/literal-text this extends, unlike B5–B8.
       default) and `LLM_YUKI_LOG_LEVEL=DEBUG`, confirming the format renders correctly, DEBUG lines are
       genuinely suppressed at INFO, and the log stream reads as a coherent narrative of the batch
 
+### B10. Query module (D25): modular multi-strategy retrieval + agentic iteration, plus a dataset-agnostic QA evaluation harness (2026-08-30) — implemented and verified
+
+`docs/llm-yuki-v0.1-proposal/QUERY-SEARCH-SURVEY.md` found that the Query circle (Karpathy's third, after
+Ingest/Compile and Lint) had never been decided or built — D8's success criteria need it to actually run
+`M3SciQA`/`MMDocRAG` QA pairs, but nothing in `ARCHITECTURE.md` covered it. This work opens and implements
+D25 (proposal `README.md`), then builds the QA-scoring harness D25 makes runnable. Full `mypy src`/`ruff
+check`/`ruff format --check`/`pytest` sweep: 233 tests passed, 93%+ line coverage (well above the 60%
+threshold), `mypy --strict` clean across all 40 source files.
+
+- [x] **`domain/query.py`** — `PageRecord`/`load_corpus` (the only function here touching `Writer`),
+      `SearchStrategy` ABC + `StructuredSignalSearch` (structured-fields-first keyword search, matching the
+      LLM-Wiki paper's `wiki_search` description), `reciprocal_rank_fusion`/`graph_result_quota`/
+      `expand_via_wikilinks` (RRF + one-hop graph expansion, formulas borrowed from `nashsu/llm_wiki`'s
+      `search.rs` per the survey's §3.2), `AnswerSynthesizer`/`NextActionDecider` ABCs, and two swappable
+      top-level `QueryEngine`s: `SinglePassQueryEngine` (search → fuse → graph-expand → read → synthesize,
+      once) and `IterativeAgenticQueryEngine` (`wiki_search`/`wiki_read` loop, `T_max`/patience termination,
+      reconstructed from the survey's §2 pseudocode of the LLM-Wiki paper's own algorithm).
+- [x] **Embedding retrieval deliberately not implemented** (D25 decision 1, explicit user instruction this
+      session) — `adapters/query/embedding_search.py::EmbeddingSearch` implements `SearchStrategy` but its
+      `search()` always raises `NotImplementedError`. Same "leave room, don't build it" treatment D16 gives
+      the `deepagents` skill-swap point and D22 gives soft-collision dedup.
+- [x] **`adapters/llm/answer_synthesizer.py::LLMAnswerSynthesizer`** / **`adapters/llm/
+      next_action_decider.py::LLMActionDecider`** — same shape as `LLMExtractor` (prompt, JSON parse via
+      `json_utils.parse_json_object`, `LLMOutputError` on schema mismatch, cost recorded via
+      `JsonlCostLedger`). Citations are mandatory (D25 decision 3): `cited_slugs` is required in the
+      synthesizer's response schema, filtered against the pages actually provided (hallucinated-slug
+      filtering, same precedent as `Extractor.select_pages`) rather than treated as fatal.
+- [x] **`llm-yuki query <bundle_dir> "<question>"`** CLI subcommand (`--method single-pass|agentic`,
+      `--top-k`, `--t-max`, `--patience`) — read-only against `bundle_dir`, shares the `compile`/existing
+      `query` subcommands' LLM-config fail-fast behavior (`src/llm_yuki/cli.py::_run_query`).
+- [x] **Query results are not written back to the wiki this POC** (D25 decision 4) — `QueryEngine.answer`
+      only reads through `Writer`, never calls a `write_*` method. `ASSUMPTIONS.md` A-15/A-16 record both
+      scope cuts (embedding unimplemented, no write-back).
+- [x] **`docs/implementation/query.md`** (new) — full mechanism doc, added to the reading order in
+      `docs/implementation/README.md`. `docs/llm-yuki-v0.1-proposal/ARCHITECTURE.md` §8 and root
+      `ARCHITECTURE.md` also updated with the module design/map (proposal docs are the decision-log layer,
+      updated because D25 is a genuinely new decision, not a later deviation from an existing one — unlike
+      B5–B9 above).
+- [x] **`evaluation/qa_metrics.py`/`evaluation/qa_runner.py`** (new top-level package, outside
+      `domain`/`ports`/`adapters` — evaluation tooling, not core pipeline logic, same status `cli.py` has) —
+      standard SQuAD-style EM/F1 scoring (`normalize_answer`/`exact_match`/`f1_score`/`best_exact_match`/
+      `best_f1`, multi-reference-gold aware) plus `load_qa_examples`/`run_qa_evaluation`/`EvaluationReport`
+      wired to any `QueryEngine`. New `llm-yuki evaluate-qa <bundle_dir> <qa.jsonl>` CLI subcommand
+      (`--output` writes the full JSON report). `docs/implementation/evaluation.md` documents it and lays out
+      the still-outstanding steps for a real run.
+- [ ] **Not done this session — explicit follow-up, not an oversight**: the harness is dataset-agnostic and
+      proven correct against a small synthetic bundle+QA set (`tests/e2e/test_evaluate_qa_batch.py`), but
+      `M3SciQA`/`MMDocRAG` themselves are not vendored or converted, so no real-benchmark EM/F1 numbers exist
+      yet. Needed before Section E below can be checked off: (a) a dataset-specific conversion script per
+      benchmark (raw files → D10 Raw Source folders, QA pairs → this harness's JSONL shape), (b) `llm-yuki
+      compile` each converted corpus, (c) `llm-yuki evaluate-qa` each bundle for both `QueryEngine`s, (d) a
+      separate simple vector-RAG baseline for the D8 comparison (out of scope for the Query module itself,
+      since D25 leaves embedding retrieval unimplemented — this baseline needs its own harness). See
+      `docs/implementation/evaluation.md`'s "What 'done' looks like" section for the concrete task list.
+- [ ] **`T_max`/`patience` defaults (6/2) are untuned placeholders** — same treatment as D15/B-5's other
+      untuned constants: validate against real `M3SciQA`/`MMDocRAG` data once available, adjust if the
+      agentic loop terminates too early/late in practice.
+
 ## C. Test coverage gaps (ASSUMPTIONS.md §C)
 
 - [x] Unit tests for **B-3**: `Writer` incremental backlink maintenance (`key_facts` field) — already covered
@@ -510,7 +568,11 @@ items below, they no longer describe the current decision.
 - [ ] Compilation/maintenance correctness: `index.md` completeness (no orphan/missing pages; as of D23 this
       means the root index plus each of `claims/`/`concepts/`/`documents/`); `log.md` audit trail
       precision/recall against manually injected contradictions
-- [ ] Retrieval/reasoning correctness: `M3SciQA`/`MMDocRAG` QA accuracy/F1 vs. a plain vector-RAG baseline
+- [ ] Retrieval/reasoning correctness: `M3SciQA`/`MMDocRAG` QA accuracy/F1 vs. a plain vector-RAG baseline.
+      **Mechanism now exists (§B10, D25)** — `llm-yuki evaluate-qa` + `evaluation/qa_runner.py` can produce
+      this number for any bundle/QA-JSONL pair; what's still missing is the dataset acquisition/conversion
+      work itself (see §B10's last bullet and `docs/implementation/evaluation.md`), plus the vector-RAG
+      baseline harness to compare against.
 - [ ] Cross-domain portability: core `Claim`/`Concept`/`Document` types (D21) and contradiction pipeline run
       on both domains with no core pipeline changes (only domain-specific customization)
 - [ ] Differentiation vs. `openwiki`: demonstrable diagnose → root-cause → targeted-fix records that
@@ -548,3 +610,11 @@ Per `SPEC.md` Minimal Scope — listed here so nobody "fixes" these as if they w
 - Recalibrating D22's 70% merge-rejection threshold against our own `Concept.summary` length distribution —
   used as borrowed from `llm_wiki` verbatim
 - `index.md` nesting deeper than the core-type level, and the optional OKF `okf_version` frontmatter field (D23)
+- A real `EmbeddingSearch` implementation (D25) — the `SearchStrategy` interface accommodates one, but no
+  embedding provider is wired up this POC; `search()` always raises `NotImplementedError`
+- Writing `QueryEngine` answers/query results back into the wiki as new pages (D25) — Query is read-only this
+  POC; `QueryEngine.answer` never calls a `Writer.write_*` method
+- Throughput/latency comparison between `SinglePassQueryEngine` and `IterativeAgenticQueryEngine` (D25) —
+  both exist to each be validated against `M3SciQA`/`MMDocRAG`, not to be benchmarked against each other
+- Locking in specific `T_max`/patience numbers for `IterativeAgenticQueryEngine`, or a formal query-latency
+  SLA (D25) — left as constructor/CLI-tunable defaults, see §B10's last bullet

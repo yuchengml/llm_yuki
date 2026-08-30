@@ -21,6 +21,8 @@ the end-to-end flow, then drill into whichever stage you need.
 | [`error-book.md`](./error-book.md) | `ErrorBook`'s five-phase lifecycle, `log.md` audit-trail writes, YAML persistence |
 | [`writer.md`](./writer.md) | `MarkdownWriter`: bundle layout, body rendering, incremental backlink maintenance, D23's hierarchical `index.md` |
 | [`cli-and-cost-ledger.md`](./cli-and-cost-ledger.md) | The `llm-yuki compile` CLI, LLM client config, `cost_ledger.jsonl` |
+| [`query.md`](./query.md) | D25's Query module: `SearchStrategy`/`QueryEngine`, `StructuredSignalSearch`, RRF fusion + graph expansion, `SinglePassQueryEngine`/`IterativeAgenticQueryEngine`, the `llm-yuki query` CLI |
+| [`evaluation.md`](./evaluation.md) | The QA evaluation harness (D5/D8): EM/F1 scoring, `run_qa_evaluation`, the `llm-yuki evaluate-qa` CLI, and what's still needed for a real `M3SciQA`/`MMDocRAG` run |
 
 ## Reading order for a first pass
 
@@ -30,6 +32,8 @@ the end-to-end flow, then drill into whichever stage you need.
 4. `merger.md` → `validator.md` → `error-book.md` → `writer.md` — how a candidate becomes a persisted page,
    in the order Phase 2 actually calls them.
 5. `cli-and-cost-ledger.md` — how it all gets invoked and what it costs.
+6. `query.md` — the third circle (Query), read-only against the bundle `compile` produced.
+7. `evaluation.md` — how Query's output gets scored against benchmark QA pairs.
 
 ## Conventions used across these docs
 

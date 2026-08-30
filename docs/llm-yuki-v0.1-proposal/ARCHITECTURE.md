@@ -435,6 +435,112 @@ N/M 具體數值不在架構層級決定,留給 scaffolding 階段依實測效�
 
 ---
 
+## 8. Query 模組(檢索/查詢管線)
+
+來源:D25(`QUERY-SEARCH-SURVEY.md` 的調查為依據)。這是 Karpathy 原始模式三循環的第三個——Ingest/Compile(§2–3)、Lint(§4)之外的 Query 循環,不修改 bundle,只讀取既有頁面、綜合回答。
+
+### 8.1 模組架構
+
+```mermaid
+flowchart LR
+    Q["question: str"] --> QE
+
+    subgraph QE["QueryEngine (domain, no I/O beyond Writer port)"]
+        direction TB
+        LC["load_corpus(writer)<br/>→ list[PageRecord]"] --> STRAT
+        subgraph STRAT["SearchStrategy(ies)"]
+            SS["StructuredSignalSearch<br/>(title/aliases/tags/description → body)"]
+            ES["EmbeddingSearch<br/>(NotImplementedError, D25)"]
+        end
+        STRAT --> FUSE["reciprocal_rank_fusion"]
+        FUSE --> GRAPH["expand_via_wikilinks<br/>(one-hop, rank-weighted)"]
+        GRAPH --> READ["read top-k full pages<br/>(writer.read_claim/read_concept/read_source)"]
+        READ --> SYN["AnswerSynthesizer"]
+    end
+
+    SYN --> A["QueryAnswer<br/>(answer text + cited slugs)"]
+```
+
+- `SearchStrategy`(domain ABC):`search(query: str, corpus: list[PageRecord], top_k: int) -> list[SearchHit]`. 純函式風格,不碰 `Writer`——語料快照(`PageRecord`)由 `load_corpus(writer)` 一次性建好,之後所有策略/融合/圖擴展都操作這份唯讀快照,不重複打 `Writer`。
+  - `StructuredSignalSearch`(domain,具體實作,§8.2):唯一這次 POC 實作的檢索訊號。
+  - `EmbeddingSearch`(adapters,具體實作,§8.2 末段):**未實作**,呼叫即拋 `NotImplementedError`——介面留著,實作留白(D25 決議1)。
+- `AnswerSynthesizer`(domain ABC):`synthesize(question, hits, corpus_by_slug, batch_id) -> QueryAnswer`。LLM 綜合回答並附引用,具體實作 `LLMAnswerSynthesizer` 在 adapters(呼叫既有的 `OpenAICompatibleClient` + `JsonlCostLedger`,跟 `LLMExtractor` 同一套機制)。
+- `NextActionDecider`(domain ABC,只給 `IterativeAgenticQueryEngine` 用):`decide(question, evidence) -> QueryAction`。決定下一步是 `wiki_search`、`wiki_read` 還是 `stop`,具體實作 `LLMActionDecider` 在 adapters。
+- `QueryEngine`(domain ABC):`answer(question: str, writer: Writer, top_k: int) -> QueryAnswer`。兩個具體實作見 §8.4/§8.5。
+
+### 8.2 `StructuredSignalSearch`——結構化訊號優先
+
+比照 LLM-Wiki 論文對 `wiki_search` 的敘述(「先比對結構化 metadata,比不到才退到全文比對」):
+
+1. 先比對 `title`(`Claim` 沒有獨立 title,用 `slug`)、`aliases`(僅 `Concept`)、`tags`(僅 `Concept`)、`description` 這幾個結構化欄位,命中給高權重。
+2. 上述都沒命中,才退到 `content`(`claim_text`/`summary`)全文比對,權重較低。
+3 個以上訊號同時命中的頁面分數疊加,不是取最高分。不是 BM25(沒有 IDF/文件長度正規化),是加權啟發式評分——跟 `nashsu/llm_wiki` 的 `score_file` 同一類取捨(比 BM25 簡單但夠用,§ 調查文件 3.2(d))。
+
+`EmbeddingSearch`(adapters,`adapters/query/embedding_search.py`):實作 `SearchStrategy` 介面,但 `search()` 呼叫立即拋 `NotImplementedError`,訊息指向這條 D25 決議與未來要接的 embedding provider——讓呼叫端(`QueryEngine` 組裝時)可以清楚看到「這是故意留白的架構占位」,而不是缺一個實作類別。
+
+### 8.3 融合與圖擴展
+
+- `reciprocal_rank_fusion(rankings: list[list[SearchHit]], k: float = 60.0) -> list[SearchHit]`:標準 RRF 公式 `score += 1 / (k + rank)`,逐個 ranking 疊加——直接借用調查文件 3.2(b) `nashsu/llm_wiki` 的 `apply_rrf_scores` 公式。這次 POC 只有一個非 stub 策略(`StructuredSignalSearch`),融合步驟先留著(等 `EmbeddingSearch` 之後真的實作,不需要改 `QueryEngine` 的呼叫邏輯)。
+- `expand_via_wikilinks(seed_hits, corpus, quota) -> list[SearchHit]`:以融合後排名最前面的 `seed_hits` 為種子,沿 `PageRecord.links`(`related_concepts`/`related_pages`/`key_facts`/`produced_claims`/`produced_concepts` 攤平後的集合)找一跳鄰居,鄰居分數 `1/(seed_rank+1)` 依種子名次加權——借用調查文件 3.2(c) 的 `blend_graph_results` 精神。
+- `graph_result_quota(limit, primary_hits) -> int`:配額計算,借用 `nashsu/llm_wiki` 的 `graph_result_quota` 公式(`MIN_GRAPH_RESULT_RATIO`–`MAX_GRAPH_RESULT_RATIO`,依主要訊號覆蓋率動態調整)。這次 POC 沒有向量訊號,`primary_hits` 恆等於 `StructuredSignalSearch` 的命中數,覆蓋率通常偏低,配額多半落在上限附近。
+
+### 8.4 `SinglePassQueryEngine`——單次融合(Karpathy gist baseline)
+
+```python
+def answer(self, question: str, writer: Writer, top_k: int) -> QueryAnswer:
+    corpus = load_corpus(writer)
+    rankings = [strategy.search(question, corpus, top_k) for strategy in self._strategies]
+    fused = reciprocal_rank_fusion(rankings)
+    graph_hits = expand_via_wikilinks(fused[:_SEED_COUNT], corpus, quota=graph_result_quota(top_k, len(fused)))
+    hits = _merge_and_rank(fused, graph_hits)[:top_k]
+    return self._synthesizer.synthesize(question, hits, corpus, batch_id)
+```
+
+一次性:跑策略 → 融合 → 圖擴展 → 讀回 top-k → 綜合回答,不迭代。角色是這次 POC 最簡單的對照組——沒有 embedding,也沒有 agentic 多跳,純粹測「結構化訊號 + 圖擴展」這個組合本身的檢索品質。
+
+### 8.5 `IterativeAgenticQueryEngine`——agentic 迭代(LLM-Wiki 論文核心論點)
+
+直接依論文敘述重建的 pseudocode(`QUERY-SEARCH-SURVEY.md` §2)實作,只是把 `wiki_search`/`wiki_read` 換成這次 POC 的具體積木:
+
+```python
+def answer(self, question: str, writer: Writer, top_k: int) -> QueryAnswer:
+    corpus = load_corpus(writer)
+    evidence: list[EvidenceItem] = []
+    consecutive_empty = 0
+    tool_calls = 0
+
+    while tool_calls < self._t_max and consecutive_empty < self._patience:
+        action = self._decider.decide(question, evidence)
+        tool_calls += 1
+        if action.tool == "wiki_search":
+            hits = self._strategy.search(action.query, corpus, top_k)
+            consecutive_empty = consecutive_empty + 1 if not hits else 0
+            evidence.append(EvidenceItem(kind="search", hits=hits))
+        elif action.tool == "wiki_read":
+            pages = [corpus_by_slug[slug] for slug in action.slugs if slug in corpus_by_slug]
+            evidence.append(EvidenceItem(kind="read", pages=pages))
+        else:  # action.tool == "stop"
+            break
+
+    return self._synthesizer.synthesize(question, evidence, corpus, batch_id)
+```
+
+- **終止條件三選一**(調查文件 §2「三個終止條件是『或』的關係」):`evidence` 被 `NextActionDecider` 自己判斷為 sufficient(回傳 `stop`)、`tool_calls` 達 `T_max`、或連續空搜尋達耐心閾值 `P`。
+- `wiki_read` 讀到的頁面內容含 `PageRecord.links`,下一輪 `NextActionDecider` 可以看到這些連結決定要不要繼續追——這是論文說的「讀到的內容本身帶連結,是下一跳的線索」,不需要額外的圖走訪邏輯,`corpus`(唯讀快照)本身已經帶著全部連結資訊。
+- `T_max`/`P` 的具體數字這次決議不鎖定(D25 決議「明確排除」),留給 scaffolding 依 `M3SciQA`/`MMDocRAG` 實測基準線調整,比照 D15/B-5 的既有精神。
+
+### 8.6 答案與引用
+
+`QueryAnswer`(domain dataclass):`question: str`、`answer: str`、`cited_slugs: list[str]`、`method: str`(`"single_pass"`/`"iterative_agentic"`,供 D8 對照基準的實驗記錄用)。`AnswerSynthesizer` 的 LLM prompt 強制要求回傳 `cited_slugs`(D25 決議3——不像 `nashsu/llm_wiki` 交給 agent 自行決定要不要引用);回傳的 `cited_slugs` 會過濾成只保留確實在這次讀回的頁面集合內的 slug,跟 `Extractor.SelectPages` 對 hallucinated slug 的過濾慣例(§2.2.1)一致,不是讓整次查詢直接失敗。
+
+### 8.7 明確排除
+
+- embedding 檢索的具體實作(D25 決議1)。
+- 查詢結果寫回 wiki——不產生新的 `Concept`/其他型別頁面,不呼叫 `Writer.write_*`(D25 決議4)。查詢是唯讀操作,`QueryEngine.answer` 只接受 `Writer` 用來讀,不做任何寫入。
+- 兩個 `QueryEngine` 之間的吞吐量/延遲量化對照(D25「明確排除」)——都做是為了都能被驗證用,不是為了互相比較。
+
+---
+
 ## 待補齊
 
-這份文件反映 2026-08-27 為止的決議(D1–D24)。如果之後 `README.md` 有新決議或修正既有決議,回頭同步更新對應章節,以最新版本為準。
+這份文件反映 2026-08-30 為止的決議(D1–D25)。如果之後 `README.md` 有新決議或修正既有決議,回頭同步更新對應章節,以最新版本為準。
