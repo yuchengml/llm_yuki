@@ -18,10 +18,13 @@ Before starting any task, read the following documents in order:
 | [docs/llm-yuki-v0.1-proposal/ASSUMPTIONS.md](./docs/llm-yuki-v0.1-proposal/ASSUMPTIONS.md) | Known scope limits and unverified assumptions — check before "fixing" something that is a deliberate exclusion |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | Module-boundary summary for this repo (Ports & Adapters) |
 | [DECISIONS.md](./DECISIONS.md) | Engineering/tooling ADRs (package manager, architecture style, etc.) |
+| [docs/implementation/](./docs/implementation/) | How each subsystem actually works today — the current mechanism, not the decision that led to it |
 
 The proposal's `README.md` ([docs/llm-yuki-v0.1-proposal/README.md](./docs/llm-yuki-v0.1-proposal/README.md))
-holds the full decision log (D1–D19) with reasoning. Consult it when a design choice in `ARCHITECTURE.md`
-seems arbitrary — it almost certainly traces back to a decision there.
+holds the full decision log (D1–D23) with reasoning. Consult it when a design choice in `ARCHITECTURE.md`
+seems arbitrary — it almost certainly traces back to a decision there. `docs/implementation/` is the
+complementary layer: once you know *why*, read there for exactly *how* it's built (modules, method
+signatures, algorithms) before changing pipeline code.
 
 ### Step 2 — Learn the rules
 

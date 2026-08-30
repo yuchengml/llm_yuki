@@ -27,15 +27,37 @@
 
 ### 相關參考
 
-已在既有筆記中詳列,這裡只列最相關的幾個,細節見 `knowledge-base/topics/llm-wiki-knowledge-construction-and-retrieval.md`:
-- Karpathy 原始 gist:三層架構(Raw Sources / Wiki / Schema)+ 三循環(Ingest / Query / Lint)
-- 學術形式化:*Retrieval as Reasoning via LLM-Wiki*(arXiv 2605.25480)—— `wiki_search` + `wiki_read` 兩個原子工具的組合式檢索
-- OKF(Open Knowledge Format,Google Cloud,2026-06 首發):`index.md` + typed frontmatter + 標準 markdown link 的具體 schema 與 conformance 規則。**⚠️ 版本落差**:這是 2026-06 剛發布時(v0.1)的簡化描述;2026-08-19 直接查官方 spec 發現內容已比首發豐富不少(疑似已更新到 v0.2 前後),細節見下方「已決議」D1 附註與討論紀錄。
-- 代表實作:`nashsu/llm_wiki`、`SamurAIGPT/llm-wiki-agent`(兩階段連結建構:確定性 wikilink 解析 + 語義關係推斷)
-- **`langchain-ai/openwiki`(2026-07 新發現,見下方討論紀錄 2026-08-19 補充)**:LangChain 出品的 CLI 工具,輸出格式即為 **OKF v0.1 bundle**,是「OKF 的產出者(producer),不是新格式」。有兩種模式:code mode(掃描 repo、生成/維護技術文件)、personal mode(接 Gmail / Notion / X / web search / Hacker News 等 connector,建個人知識庫)——後者證明 OKF-based wiki 不限於程式碼領域。用 GitHub Action 每日排程重新掃描、自動開 PR 更新文件,是「編譯 → 維護」動態迴路的現成實作範例。
-- **`atomicstrata/llm-wiki-compiler`(2026-08-19 新發現)**:用 Configurable Lifecycle Profiles(`.llmwiki/profile.json`)讓每個領域宣告自己的 typed entities + 生命週期,共用 runtime 驗證,已有 `autosci`(研究)、`newsroom`(編輯)兩份跨領域範本,並支援 OKF export/import。是目前查到「分層 schema 因應跨領域」這個方向最接近的現成原型,細節見下方 D1 候選方向表格。
-- **`arturseo-geo/llm-knowledge-base`(2026-08-19 新發現)**:把 Karpathy workflow 正式化的個人知識庫 schema 標準,用目錄結構(`wiki/`/`learning/`/`insights/`/`output/`)分層而非 type 標籤,並用 `status: quarantined` 等 frontmatter 欄位標記矛盾內容。
-- **驗證資料集(D5 決議,2026-08-25)**:[`M3SciQA`](https://arxiv.org/abs/2411.04075)(科學論文,多文件+部分多模態)、[`MMDocRAG`](https://mmdocrag.github.io/MMDocRAG/)(十領域長文件,重度多模態)當 D4 的 2 個對照領域;[`MuSiQue`](https://arxiv.org/abs/2108.00573)(純文字 2–4 hop multi-hop QA)當跨文件推理準確率的 baseline,對齊 GraphRAG-Bench/LLM-Wiki 論文用的評測傳統。細節見下方 D5。
+完整研究筆記見 `knowledge-base/topics/llm-wiki-knowledge-construction-and-retrieval.md`;開源專案的完整 framework analysis 見各自的 `knowledge-base/frameworks/<project>/analysis.md`(目前只有 `llm_wiki-0.6.11` 完成,`deepagents-0.7.6` 延後未寫,見下方「執行框架」)。下面依「查證深度」誠實分類——**完整原始碼分析**(已 vendor 進本 repo 並逐檔讀過)、**官方文件/repo README 查閱**(讀過線上文件但沒 vendor/沒讀原始碼)、**僅列出未深入**(只在候選清單裡出現過名字,沒有具體查證),避免誤讀成每個來源都被同等程度驗證過。
+
+#### 核心標準/學術基礎
+
+| 名稱 | 核心做法 | 跟我們的關係 |
+|---|---|---|
+| Karpathy 原始 gist | 三層架構(Raw Sources 不可變原始文件 / Wiki 由 LLM 生成維護 / Schema 定義規則)+ 三循環(Ingest / Query / Lint) | 整個方法論的精神地基(D1)。**"per-document summary page"這個細節一度來回**:先被否決(D20,依 LLM-Wiki 論文與兩個現成實作 3 比 1 反對),後因 `nashsu/llm_wiki` 有忠實實作出的 `source` 型別佐證而推翻採用(D21) |
+| 學術形式化:*Retrieval as Reasoning via LLM-Wiki*(arXiv 2605.25480) | 把 Karpathy 模式形式化成 Algorithm 1(七類 Error Book、五階段生命週期)+ `wiki_search`/`wiki_read` 兩個原子工具的組合式檢索 | Algorithm 1 直接採為 lint/Error Book 的執行迴圈範本(D14);論文「每頁代表一個獨立實體或概念」的論點曾是 D20 否決 `Document` 型別的三個依據之一(後由 D21 推翻) |
+| OKF(Open Knowledge Format,Google Cloud,2026-06~) | `index.md` 目錄 + typed frontmatter(`type` 必填)+ 標準 markdown link 交叉引用 + 明確 MUST/SHOULD/MAY conformance 規則 | 整個 bundle 格式的依循基準(D1);lint 兩層檢查之一就是 OKF 官方 conformance 驗證(D6);D23 的分層 `index.md` 規則直接依 OKF spec 本身「漸進式揭露」的規定設計。**⚠️ 版本落差**:2026-06 首發時的簡化描述,跟 2026-08-19 直接查官方 spec 原文(疑似已更新到 v0.2 前後)內容不一致,細節見 D1 附註 |
+
+#### 代表實作/開源專案(LLM Wiki 領域)
+
+| 名稱 | 查證深度 | 核心做法 | 跟我們的關係 |
+|---|---|---|---|
+| `nashsu/llm_wiki` | **完整原始碼分析**(已 vendor 進 `knowledge-base/frameworks/llm_wiki-0.6.11/`,見 `analysis.md`) | 跨平台桌面 App(Tauri+Rust 後端/React 前端),忠實遵循 Karpathy 精神。九種內建型別(含 `source`)、兩步驟 CoT ingest(Analysis→Generation)、`page-merge.ts` 三層合併保護、`dedup.ts` 軟碰撞去重、`lint.ts`/`lint-structural-core.ts` 雙層無狀態 lint(沒有 Error Book)、`context-budget.ts` 固定比例配額 | `source` 型別直接觸發 D21(推翻 D20,加 `Document` 型別);`page-merge.ts` 三層保護採用進 D22;`dedup.ts` 軟碰撞去重列為 design-only、不實作(D22);`context-budget.ts` 固定比例配額精神借用進 D21 的 `summary` 遞迴 batch-reduce 演算法。**不是 OKF conformant**——是它自己的 bundle 格式,借用的機制都要重新對應到我們自己的 schema,不是直接抄 |
+| `SamurAIGPT/llm-wiki-agent` | **僅列出,未深入分析** | 兩階段連結建構:確定性 wikilink 解析 + 語義關係推斷 | 目前只是「代表實作」清單裡的一員,沒有任何具體機制被借用到已決議項目裡——誠實標注,不要誤讀成已經像 `nashsu/llm_wiki` 那樣查證過 |
+| `langchain-ai/openwiki`(OpenWiki Brains) | 官方文件/repo README 查閱,未 vendor 原始碼 | LangChain 出品 CLI,輸出格式即 **OKF v0.1 bundle**,是「OKF 的產出者,不是新格式」。兩種模式:code mode(掃 repo 生成/維護技術文件)、personal mode(接 Gmail/Notion/X/web search 等 connector 建個人知識庫)。GitHub Action 每日排程整批重新掃描、自動開 PR | D2 決議借用其「connector 抽象攝入」架構模式;它「定期整批重新掃描生成」的維護方式,是我們刻意做出差異化的對照對象——D1/D2 的「lint 診斷矛盾→歸因→針對性修正」正是要回應這點;D8 決議裡也是量化+質化的對照基準之一 |
+| `atomicstrata/llm-wiki-compiler` | 官方文件/repo README 查閱,未 vendor 原始碼 | Configurable Lifecycle Profiles(`.llmwiki/profile.json`)——宣告式定義各領域 typed entities + 生命週期,共用 runtime 驗證,已有 `autosci`(研究)/`newsroom`(編輯)兩份跨領域範本,支援 OKF export/import | 目前查到「分層 schema 因應跨領域」這個候選方向最接近的現成原型(D1),但 D3 最終選了不同路線(deepagents 程序式 skill,而非 CLP 宣告式 profile)——**這題本身尚未完全收斂**,只是採取了不同實作路徑,細節見 D3 的附註;D12 的 Phase 1/Phase 2 兩階段執行策略也部分參照它的兩階段形狀 |
+| `arturseo-geo/llm-knowledge-base` | 官方文件/repo README 查閱,未 vendor 原始碼 | 個人知識庫 schema 標準,用目錄結構(`wiki/`/`learning/`/`insights/`/`output/`)分層而非 type 標籤,`status: quarantined` 等 frontmatter 欄位標記矛盾內容 | 只在 D1 候選方向表格中列為對照組,沒有具體機制被採納到任何決議 |
+
+#### 執行框架(不是 LLM Wiki 方法論本身,是我們的實作地基)
+
+| 名稱 | 查證深度 | 核心做法 | 跟我們的關係 |
+|---|---|---|---|
+| `deepagents` | 已 vendor 進 `knowledge-base/frameworks/deepagents-0.7.6/`,**但 `analysis.md` 延後未寫** | 通用 agent 框架 | D3 決議的客製化執行層——核心 pipeline 之外,各領域客製化邏輯包成 deepagents 的 skill。**目前仍是未查證假設**(`ASSUMPTIONS.md` B-1,風險等級高):deepagents 是否原生支援「skill」這個概念、具體是 sub-agent、工具註冊、還是外部檔案結構,都還沒確認過,`SPEC.md` 撰寫時已明講這點 |
+
+#### 評測方法論參照(非設計來源)
+
+GraphRAG-Bench——D5/D8 決議對照基準(簡單向量 RAG、`langchain-ai/openwiki`)時,評測邏輯與既有文獻數字的對照對象,不是我們借用機制的來源。
+
+**驗證資料集不算在這裡**:`M3SciQA`/`MMDocRAG`/`MuSiQue` 是 D5 決議的評測語料,不是設計方法論的參照對象,細節見下方 D5 決議,不重複列在這節。
 
 ---
 
@@ -463,7 +485,7 @@ flowchart LR
 3. **`contradicted_by`(frontmatter 結構化欄位,D9 補充決議)**——語意上是「衝突」而非「關聯」的特殊連結,格式是 `{slug, reason}` 陣列。OKF 不支援型別邊標籤,這個語意只能靠 frontmatter 自訂欄位承載,是我們在 OKF 基礎上的必要擴充(呼應 D1「保留優化空間」)。
 4. **`source_ref`(frontmatter 結構化欄位,D9 補充決議,對應 OKF 的 `sources[]`/`resource`)**——指向 Raw Sources 出處的連結,方向是連出 wiki 之外,指到 D10 Raw Sources 資料夾裡的原始位置,不是連到另一個 wiki 頁面。
 5. **圖片連結(D10 二次更正)**——Raw Sources 的 txt 正文檔內用 markdown image 連結指向 `images/` 子資料夾,Connector 攝入時原樣保留,掛在 `source_ref`/`resource` 底下。
-6. **`index.md` 裡的目錄連結(D1 的 Single Index 規則)**——列出 bundle 內所有頁面,D7 驗證完整性(無遺漏、無孤兒頁面)。
+6. **`index.md` 裡的目錄連結**——列出 bundle 內所有頁面,D7 驗證完整性(無遺漏、無孤兒頁面)。**⚠️ 2026-08-27 由 D23 修正**:這裡原本寫「D1 的 Single Index 規則」,查證 D1 原文後確認 D1 沒有講過這件事,是先前寫作時把自己的推論誤標成引用;且 D23 已經把 `index.md` 改成分層索引(依核心型別分子目錄各自一份),不再是單一檔案,詳見 D23。
 
 另有一種不算「wiki page 內部」但相關的連結:**D14 Error Book 的 `affected_refs`**——從錯誤 entry 連到受影響的 Claim/Concept slug,是 pipeline meta-state 對 wiki content 的連結,不是 wiki page 之間的連結。
 
@@ -533,21 +555,129 @@ flowchart LR
 
 ---
 
-## 執行方式總覽(把 D1–D19 串成一條 pipeline)
+### D20. 型別系統明確不加 `Document`(per-document)頁面型別,維持 D9 的 `Claim`/`Concept` 二型別——對齊 LLM-Wiki 論文與現成實作的路線,不採 Karpathy 原始 gist 的 per-source summary page 路線(2026-08-27)
 
-這不是新決議,只是把散落在 D1–D10 的執行手法,依 pipeline 的四個階段重新排一遍,方便下一步直接對照著寫 `SPEC.md`。**模組/抽象邊界的架構圖見 D16**:下面四階段對應到 D16 的 `Connector`(階段1)→`Extractor`/`Merger`(階段2)→`Validator`/`ErrorBook`/`Fixer`(階段3)→`Writer`(貫穿階段2/3 的持久化)。
+**背景**:使用者問「根據 LLM Wiki 精神和其他方法,每一個 document 都應該有自己的 wiki page 是吧?」。查了四個來源,發現答案不是單純的「是」——四個來源分裂成兩派。
+
+**查證結果(逐字引用,不是轉述)**:
+
+1. **Karpathy 原始 gist**——支持有 per-document 頁面:「the LLM reads the source...**writes a summary page in the wiki**, updates the index, updates relevant entity and concept pages」、「A single source might touch 10-15 wiki pages」。Wiki 層定義列出的頁面種類明確把「Summaries」跟 entity/concept 頁面並列。
+2. **LLM-Wiki 論文(arXiv 2605.25480,已於 D14 採納 Algorithm 1 為執行範本)**——反對:「Each page represents a distinct entity or concept」;per-document/per-paragraph digest 存在,但明確活在一個跟 Wiki 層 `W` 分開的構造裡,對應 Algorithm 1 簽名本身的 **`source archives A`**(跟 `W` 是平行、分開的兩個輸入)。兩次獨立查證(arXiv HTML 原文 + alphaxiv 鏡像)結論一致:「the original paragraph-level digests are stored separately, maintaining a clear line of provenance from the structured page back to the raw source material」。
+3. **`langchain-ai/openwiki`**——反對:原始逐來源資料放在 `raw/`(平行、非 wiki 目錄),「source-specific agent runs synthesize the local wiki」,只有合成後的 concept/topic 頁面進 wiki。
+4. **`atomicstrata/llm-wiki-compiler`**——反對:「Compiled wiki, not chunks...generates typed pages: `concept`, `entity`, `comparison`, and `overview`」,sources 只在 `.llmwiki/state.json` 這個 state 層被追蹤,沒有 `Source`/`Document` 型別。
+
+**決議**:**維持現狀,不加 `Document`(或 `Source`)型別**。D9 的核心型別維持只有 `Claim`/`Concept` 兩種,不做任何修改。
+
+**理由**:
+- 四個來源裡三個(含我們已經整條採納為執行範本的論文)明確反對「per-document wiki page」;只有 Karpathy 最早的非正式描述支持。我們在 D14 已經選擇把論文的 Algorithm 1 逐字當作執行範本,繼續往論文這條線走,邏輯上比回頭改採 Karpathy 更早、更不正式的版本一致。
+- 我們自己已經做的選擇(D10 的 Raw Sources,本質上就是論文的 `source archives A`;D17 明講 `source_ref`「連出 wiki 之外,不連到另一個 wiki 頁面」)本來就對齊論文這條路線,不是巧合——這次只是把這個對齊**明確化、有意識地記錄下來**,不是新設計。
+- 加 `Document` 型別屬於範疇擴張:每份文件多一次 LLM 摘要生成(`M3SciQA` 數千篇論文、`MMDocRAG` 222 份文件,累積起來不是小數字),且 Algorithm 1 沒有這一步,得自己額外設計,違反 D14「不重新發明」的精神,也不符合 D4/D7/D19 一路的 minimal-scope、cost-conscious 判準。
+- `openwiki`/`llm-wiki-compiler` 兩個現成實作也都沒做這件事,不是我們漏查業界共識。
+
+**明確記錄的範疇侷限(呼應設計準則 MUST 7)**:這次 POC 的 wiki 沒有「這份文件本身」的單一瀏覽入口——要知道某份 Raw Source 產生了哪些 `Claim`/`Concept`,只能靠 `Claim.source_ref` 反查(全庫掃描,或依賴外部索引),不能像 Karpathy 原始 spirit 設想的那樣直接打開一個「這份文件的摘要頁」導覽。如果之後想驗證「per-document 摘要頁對人類導覽/agent 查詢有沒有實質幫助」,可以把 D20 的兩個選項(維持現狀 / 加 `Document` 型別)當一組對照實驗來跑,不是本次 POC 的範疇。
+
+**跟 D9/D10/D17 的關係**:不修改任何既有決議的內容,只是把「我們選的是論文 `source archives` 路線,不是 Karpathy per-document summary page 路線」這件事,從未言明的既定事實,變成一條顯式記錄的決議。
+
+**影響**:回答了「每個 document 是否該有自己的 wiki page」這個問題,把型別系統(D9)的設計立場做最後一次明確確認,並新增一條範疇侷限進 `ASSUMPTIONS.md`。至此型別系統(`Claim`/`Concept`)在這次 POC 裡視為定案,沒有第三個核心型別的候選。
+
+**⚠️ 2026-08-27 由 D21 推翻**:完成 `nashsu/llm_wiki` 的 framework analysis(見 `knowledge-base/frameworks/llm_wiki-0.6.11/analysis.md`)後發現它有第九種內建型別 `source`(每份文件一頁),是忠實遵循 Karpathy 精神的現成實作。使用者確認要新增這個能力,D20 的結論不再成立,見 D21。
+
+---
+
+### D21. 新增 `Document`(per-Raw-Source)核心型別,推翻 D20——依 `nashsu/llm_wiki` 的 `source` 型別實作 + 遞迴 batch-reduce 摘要生成機制(2026-08-27)
+
+**背景**:D20(前一天)依四個來源三比一的查證結果,決議不加 per-document 型別。完成 `nashsu/llm_wiki` 的 framework analysis 後,發現它是忠實遵循 Karpathy 精神、已上線的完整實作,九種內建型別裡包含 `source`(每份文件一頁,路由到 `wiki/sources/`,跟其他型別一樣參與完整的 graph/lint/relevance 機制,不特殊化處理)。使用者確認要新增這個能力——這代表推翻 D20,不能靜默改掉,需要一條明講推翻的新決議。
+
+**決議**:
+
+1. **型別系統從二型別擴充為三型別**:`Claim`(段落級主張)/`Concept`(主題頁)/`Document`(文件級導覽頁,每份 D10 Raw Source 文件一頁)。D9 的核心型別清單擴充,D20 的「維持二型別」結論由此推翻。
+
+2. **`Document` 欄位設計**(比照 D9 補充決議的模式,參考 `llm_wiki` 的 `source` type,命名對齊我們自己既有慣例):
+
+   | 欄位 | 說明 |
+   |---|---|
+   | `document_title` | 人類可讀標題(來源文件標題或檔名) |
+   | `source_path` | 對應 D10 Raw Source 資料夾位置 |
+   | `ingested_at` | 首次編譯進 wiki 的日期 |
+   | `summary` | 一段話摘要,見下方生成機制 |
+   | `produced_claims` | 這份文件產生的 `Claim` 清單(slug array)——backlink,由 `Writer` 依 D18 同一套機制維護,不是 LLM 生成 |
+   | `produced_concepts` | 這份文件觸及/更新過的 `Concept` 清單(slug array)——同上,`Writer` 維護 |
+   | `related_pages` | 相關頁面 wikilink |
+
+3. **`summary` 的生成機制:遞迴 batch-reduce,預算計算借用 `nashsu/llm_wiki` 的 `context-budget.ts` 精神**。討論過程中先後排除了兩個方案——(a)摺疊進 D12 Phase 1「第一個 passage」的抽取呼叫(不可行:D12 Phase 1 平行處理彼此獨立,沒有「第一個 passage」的排序概念,且違反設計準則 MUST 5 的「所有 passage 用同一套邏輯」);(b)完全比照 `nashsu/llm_wiki` 的兩階段 Analysis→Generation 呼叫(不採用,那是「整份文件單一處理單位」的架構,跟我們 D11 的段落級抽取架構顆粒度不同,直接移植會跟既有設計衝突)。最終採用使用者指定的具體機制,獨立於 D12 Phase 1 之外、在 D12 Phase 2 Merger 階段觸發:
+   - 觸發時機:某份文件的所有 passage 都完成 Phase 1 抽取(該文件的所有 `Claim` 都已產生)之後。
+   - 演算法:收集這份文件所有 `Claim.claim_text`,依預先定義的 context window 預算(借用 `context-budget.ts` 的固定比例配額精神計算)估算是否一次放得下。放得下:一次 LLM 呼叫直接總結成 `Document.summary`。放不下:先把 `Claim` 依預算切成多個 batch,各自一次呼叫產生 batch summary;收集所有 batch summary,重複預算檢查,放得下就一次總結成最終 `summary`,放不下就再切 batch 再總結一輪,遞迴直到收斂。
+   - 這是階層式/遞迴 map-reduce 摘要的通用模式,不是照抄某一個查過的來源,如實記錄成「我們自己的設計選擇,採用已知通用模式,預算計算沿用已借用的 `context-budget.ts` 機制」。
+   - 歸屬模組:D16 架構圖的 `Merger` 子模組職責延伸,不新增模組。
+   - 成本:新增的持續性成本(每份文件至少 1 次呼叫,`Claim` 多的文件可能要好幾輪),記進 D19 `cost_ledger.jsonl`,`stage` 用 `Merger.summarize_document`(視需要加 `round` 欄位標記批次輪數)。
+
+4. **不修改 D17 的 `source_ref` 語意**:`Claim.source_ref` 依然指向 D10 Raw Source 原始位置,不指向 wiki 頁面。`Document` 是額外新增的導覽入口,不是取代出處指標,盡量不動既有決議。
+
+5. **對 D6/D7 的影響**:`Document` 頁面一樣要通過 D6 的 OKF conformance;D7 的 `index.md` 完整性檢查範圍擴大——每個 Raw Source 都該有對應的 `Document` 頁,缺少時歸類進 D13 既有的 `Incomplete Pages`(結構性錯誤第2類),**不新增第八類錯誤**,呼應 D17 當時「能用既有分類就不新增分類」的做法。
+
+6. **撤銷 `ASSUMPTIONS.md` A-11**:原本記錄「這次 POC 的 wiki 沒有『這份文件本身』的單一瀏覽入口」這個範疇侷限,因為現在有 `Document` 頁面了,這條不再成立。
+
+**明確排除**:
+- 不設計遞迴 batch-reduce 的收斂輪數上限保護——理論上 `Claim` 數量極端多時可能要跑很多輪,這次不設安全上限,列為風險記進 `ASSUMPTIONS.md`。
+- 不測試「同一份文件被重新 ingest,`Document.summary` 要不要重算」的增量更新情境——這次 POC 假設每份 Raw Source 只 ingest 一次。
+
+**影響**:回答了「每份文件是否該有自己的 wiki page」的問題,推翻 D20,新增 `Document` 核心型別並具體化其 `summary` 生成演算法。
+
+---
+
+### D22. Merger 具體合併機制:三層保護(列入實作範疇)+ 軟碰撞去重(僅架構設計,不實作)——參考 `llm_wiki` 的 `page-merge.ts`/`dedup.ts`(2026-08-27)
+
+**背景**:D12 決議了 Phase 2 `Merger` 負責「去重、決定寫入內容」,但沒有具體化「怎麼合併」「怎麼去重」的機制本身。`nashsu/llm_wiki` framework analysis 找到兩個具體、已驗證的機制可以參考:`page-merge.ts` 的三層保護、`dedup.ts` 的軟碰撞去重。
+
+**決議**:
+
+1. **三層保護**(套用到我們的 `Concept`/`Claim` 欄位,觸發時機:`Merger` 遇到 `is_new = false` 的候選,要跟既有 `Concept` 頁面合併時):
+   - **第一層(deterministic,零成本)**:陣列型 frontmatter 欄位(`Concept.aliases`/`tags`/`key_facts`/`related_pages`/`related_sources`)一律做集合聯集,不叫 LLM。這是把 D18 已經決議的 `key_facts` 增量維護,正式擴大成套用到所有陣列型欄位的通用規則,不是新發明。
+   - **第二層(LLM 合併,含長度比例拒絕檢查)**:只有 `Concept.summary` 這種自由文字欄位,新舊內容有實質衝突(不是單純疊加)時才叫 LLM 產生合併版本;合併後長度低於「新舊兩者較長者的 70%」就判定為疑似內容流失,拒絕採用,退回「只做第一層陣列聯集、`summary` 保留舊版本」。**70% 門檻直接借用 `page-merge.ts` 的 `BODY_SHRINK_THRESHOLD`**,不重新推導,scaffolding 階段依實測調整。跟 D13 的分工:這層只抓「合併後明顯變短」這種便宜的機械式失敗模式,不取代 D13 Error Book 較貴的 LLM 語意驗證(`Unsupported Facts`/`Cross-Page Contradictions`),兩者互補。
+   - **第三層(鎖定欄位)**:`concept_title`/`type`/`created`,不管第二層 LLM 合併輸出什麼,寫入前一律強制回填既有值。呼應 D17(body 連結決定性渲染)、D18(backlink 決定性維護)已經用過兩次的「決定性優先於 LLM」原則,這裡是第三次套用,不是新設計方向。
+
+2. **軟碰撞去重**(`dedup.ts` 的做法:LLM 分組偵測「命名不同但可能是同一實體」的候選,如同義詞/縮寫/跨語言命名,確認後合併並改寫所有引用)——**這次 POC 只做架構設計,不實作**,理由:(a) 這會在 D12 Phase 2 每批次都新增一次 LLM 分組偵測呼叫,是持續性成本,直接影響 D19 的成本效率驗證;(b) `M3SciQA`/`MMDocRAG` 兩個領域的實體命名分歧程度沒有先驗證過有多嚴重,必要性未知就先納入實作不符合「先驗證核心機制、範疇刻意窄」的精神;(c) exact-slug 比對已經是 D9/D12 的既有 baseline,軟碰撞去重是錦上添花而非核心假設。比照 D16 對「skill 抽換」的處理方式——架構上留位置,這次不實作。
+
+**明確排除**:軟碰撞去重的 LLM 分組偵測不實作;70% 長度門檻不針對我們自己的 `Concept.summary` 長度分布重新校準,直接沿用借用的數字。
+
+**影響**:具體化 D12 `Merger` 的「怎麼合併」機制,並對「要不要做軟碰撞去重」這個新範疇做出明確取捨(設計但不實作)。
+
+---
+
+### D23. `index.md` 改採 OKF 分層索引:依核心型別分子目錄各自建立 `index.md`,每筆條目附一句話描述,由 `Writer` 決定性生成(2026-08-27)
+
+**背景**:使用者問「`index.md` 目前的撰寫方式和 schema」,查證後發現這幾份文件之前只從「驗證角度」講過 `index.md`(D7 要求完整性/無孤兒,D13 用雙向 diff 檢查一致性),從沒具體決議過它**內部怎麼寫**。順帶查了 OKF 官方 spec 對 `index.md` 的具體規定:可以出現在任何目錄層級以支援「漸進式揭露(progressive disclosure)」,body 依標題分組列 `* [標題](連結) - 描述`,描述 SHOULD 取自被連結頁面的 frontmatter,producer MAY 自動生成、consumer MAY 缺席時自行合成。同時發現 `ARCHITECTURE.md` 裡「`index.md`(D1 的 Single Index 規則)」這個講法,查證 D1 原文後確認 D1 根本沒講過這件事,是先前寫作時把自己的推論誤標成引用。
+
+**決議**:
+
+1. **目錄結構改為依核心型別(D9/D21 的 `Claim`/`Concept`/`Document`)分子目錄**:`bundle/claims/`、`bundle/concepts/`、`bundle/documents/`,每個子目錄各自持有一份 `index.md`,完整列出該型別底下的所有頁面(D7 的完整性/無孤兒要求,現在逐目錄套用)。`bundle/index.md` 改為頂層入口,依 OKF「漸進式揭露」精神分三個型別區塊,每區塊連到對應子目錄的 `index.md`,不在根層攤平列出所有頁面。
+2. **每筆條目附一句話描述**:不論是子目錄 index 裡的個別頁面連結,或根目錄 index 裡的型別分組連結,都要附一句話描述。直接借用該頁面既有的摘要欄位(`Concept.summary`/`Document.summary`);`Claim` 沒有獨立摘要欄位,直接用 `claim_text` 本身當描述(它本來就是一句結構化後的主張文字,不需要另外生成)。這對應 OKF spec 的 SHOULD 規則。
+3. **由 `Writer` 決定性生成,不是 LLM 生成**:不論哪一層的 `index.md`,在 Phase 2 由 `Writer` 從檔案系統實際內容 + 各頁面既有欄位重新渲染。這是「決定性優先於 LLM」原則第四次套用(前三次:D17 body 連結渲染、D18 backlink 維護、D22 三層保護的陣列聯集/鎖定欄位),不是新設計方向,也順帶避免 D13 Index Inconsistency 這類錯誤——本來就該用確定性機制杜絕,不需要靠 lint 事後抓。
+
+**明確排除**:
+- 不做比「型別」更深一層的巢狀分層(OKF spec 允許任意目錄深度,但這次 POC 只分到型別這一層,沒有需要更細的理由)
+- 不採用 OKF 允許的 `okf_version` frontmatter 選配欄位(bundle 根目錄 index.md MAY 帶這個欄位)——這次沒有跨 OKF 版本相容性要驗證,列為未來如果真的要驗證這件事時的候選項目,不是這次遺漏
+- 不改變 D7 的驗證方法論本身(還是完整性 + 無孤兒 + 階層跟磁碟一致),只是驗證範圍從「一份檔案」變成「多份檔案各自驗證 + 根層彙總驗證」
+
+**影響**:修正 `ARCHITECTURE.md` 的目錄結構圖(新增 `claims/`/`documents/` 子目錄與各自 `index.md`)、修正 §5.1 第 6 項連結形式的描述與來源標註(移除不存在的「D1 Single Index 規則」講法)、D13 結構性錯誤第 5 類(Index Inconsistency)的雙向 diff 改成逐子目錄進行 + 根層另外檢查三個型別分組是否存在且連到正確位置。`ASSUMPTIONS.md` 新增一條範疇侷限(分層深度只到型別層)。
+
+---
+
+## 執行方式總覽(把 D1–D23 串成一條 pipeline)
+
+這不是新決議,只是把散落在 D1–D23 的執行手法,依 pipeline 的四個階段重新排一遍,方便下一步直接對照著寫 `SPEC.md`。**模組/抽象邊界的架構圖見 D16**:下面四階段對應到 D16 的 `Connector`(階段1)→`Extractor`/`Merger`(階段2)→`Validator`/`ErrorBook`/`Fixer`(階段3)→`Writer`(貫穿階段2/3 的持久化)。
 
 **階段 1:攝入(Ingest)**
 用 connector 抽象引入原始資料來源(D2),不假設語料一開始就是乾淨的本機檔案。**預設/唯一實作的是 txt file connector**(D10),讀取的 Raw Sources 格式具體定義為:**一個資料夾 = 一份文件,內含一個 txt 正文檔 + 一個 `images/` 子資料夾,正文檔內用連結指向對應圖片**(D10 二次更正)。這代表圖片的**連結/出處被保留**(可對應到 OKF 的 `resource`/`sources[]` 欄位),但圖片**內容不做理解**(無 OCR、無 vision 解讀)——PDF→這種資料夾格式的轉換,以及圖片內容理解,兩者都明確排除在這次 POC 範疇外。核心攝入邏輯走 D3 的「基本 pipeline」;`deepagents` skill 客製化層(D3)在這次 POC 的角色縮小為「處理領域特有的文字結構差異」,不處理圖片內容理解。這次 POC 具體接的是兩個資料源:`M3SciQA`(科學論文語料)與 `MMDocRAG`(十領域長文件語料)(D5),語料已假設是前述資料夾格式——**⚠️ 需要看懂圖片內容才能回答的題目不在這次驗證的準確覆蓋範圍內**,但圖片的連結/出處仍會忠實保留在編譯出的 bundle 裡,細節見 D10。
 
 **階段 2:編譯(Compile)**
-產出遵循 OKF 規格的 bundle:`index.md` 目錄 + typed frontmatter(`type` 必填)+ 標準 markdown link 交叉引用(D1)。**抽取粒度採文件的自然段落/概念單位,不做固定長度 chunk 切割**(D11)——對每個段落,先定位既有相關頁面,再產生結構化的 `Claim`/`Concept` 候選(含出處)並驗證後寫入,而不是切塊後靠向量相似度撈回。型別體系用 D9 的「共享核心型別 + 領域延伸型別」:所有領域都產出 `Claim`(帶出處的抽取式主張)與 `Concept`(通用主題頁)這兩個核心型別,`M3SciQA`/`MMDocRAG` 各自的 skill 再自由加專屬型別(建議但不強制用 `<領域>:<Type>` 命名慣例),段落的實際切法交給各自的 skill 決定,core pipeline 只保證抽取單位是語意完整的自然單位。**`Claim`/`Concept` 的內部欄位 schema 見 D9 補充決議**:`Claim` 抓 `claim_text`/`source_ref`/`confidence`/`provenance_state`/`related_concepts`/`contradicted_by`,其中 `contradicted_by` 在抽取當下就順手標記候選矛盾,供階段3 的 lint 管線先篩選再歸因,不用每次全量掃描,但只是候選線索、不是權威判定(D12)。**執行策略分兩階段**(D12):Phase 1 抽取階段對 passage/文章層級都平行處理,各自比對 wiki index 的 snapshot 產生候選;Phase 2 合併寫入階段序列化執行,去重、寫入實際頁面、更新 `index.md`/`log.md`,避免並發寫入衝突。平行抽取換來的吞吐量,代價是 `contradicted_by` 可能漏掉同批次裡互相看不到彼此的 passage 之間的矛盾,這個缺口由階段3 的獨立 lint 管線補上。**`Concept` 頁面不設長度上限或拆分規則**(D15)——這是這次 POC 明確的範疇侷限,不是遺漏。**body 裡的 `## Related Pages`/`## Related Sources` 連結區塊由 `Writer` 從 `related_concepts`/`contradicted_by`/`source_ref` 決定性渲染**(D17),不由 LLM 獨立生成,避免 body 與 frontmatter 不一致、也省掉一類持續性的 lint 檢查成本。**`Concept.key_facts`(backlink)同樣由 `Writer` 在寫入當下增量維護**(D18),不是 LLM 憑印象生成,讓「查詢某概念的所有相關 Claim」不需要全庫掃描。
+產出遵循 OKF 規格的 bundle:`index.md` 目錄 + typed frontmatter(`type` 必填)+ 標準 markdown link 交叉引用(D1)。**抽取粒度採文件的自然段落/概念單位,不做固定長度 chunk 切割**(D11)——對每個段落,先定位既有相關頁面,再產生結構化的 `Claim`/`Concept` 候選(含出處)並驗證後寫入,而不是切塊後靠向量相似度撈回。型別體系用 D9 的「共享核心型別 + 領域延伸型別」:所有領域都產出 `Claim`(帶出處的抽取式主張)與 `Concept`(通用主題頁)這兩個核心型別,`M3SciQA`/`MMDocRAG` 各自的 skill 再自由加專屬型別(建議但不強制用 `<領域>:<Type>` 命名慣例),段落的實際切法交給各自的 skill 決定,core pipeline 只保證抽取單位是語意完整的自然單位。**⚠️ 2026-08-27 由 D21 推翻**:原本這裡寫「明確不新增 `Document`(per-document)型別」(D20),現已推翻——型別系統擴充為 `Claim`/`Concept`/`Document` 三型別,每份 Raw Source 有自己專屬的 `Document` 導覽頁(D21),其 `summary` 由遞迴 batch-reduce 機制生成。`Merger`(D12 Phase 2)合併既有 `Concept` 頁面時,採三層保護機制(陣列聯集/LLM合併+長度比例拒絕/鎖定欄位,D22)。**`Claim`/`Concept` 的內部欄位 schema 見 D9 補充決議**:`Claim` 抓 `claim_text`/`source_ref`/`confidence`/`provenance_state`/`related_concepts`/`contradicted_by`,其中 `contradicted_by` 在抽取當下就順手標記候選矛盾,供階段3 的 lint 管線先篩選再歸因,不用每次全量掃描,但只是候選線索、不是權威判定(D12)。**執行策略分兩階段**(D12):Phase 1 抽取階段對 passage/文章層級都平行處理,各自比對 wiki index 的 snapshot 產生候選;Phase 2 合併寫入階段序列化執行,去重、寫入實際頁面、更新 `index.md`/`log.md`,避免並發寫入衝突。平行抽取換來的吞吐量,代價是 `contradicted_by` 可能漏掉同批次裡互相看不到彼此的 passage 之間的矛盾,這個缺口由階段3 的獨立 lint 管線補上。**`Concept` 頁面不設長度上限或拆分規則**(D15)——這是這次 POC 明確的範疇侷限,不是遺漏。**body 裡的 `## Related Pages`/`## Related Sources` 連結區塊由 `Writer` 從 `related_concepts`/`contradicted_by`/`source_ref` 決定性渲染**(D17),不由 LLM 獨立生成,避免 body 與 frontmatter 不一致、也省掉一類持續性的 lint 檢查成本。**`Concept.key_facts`(backlink)同樣由 `Writer` 在寫入當下增量維護**(D18),不是 LLM 憑印象生成,讓「查詢某概念的所有相關 Claim」不需要全庫掃描。
 
 **階段 3:Lint / 品質守門**
 直接採納 LLM-Wiki 論文 Algorithm 1 當執行迴圈範本(D14),搭配 D13 的 Error Book 設計:七類錯誤(5 個結構性 + 2 個內容性)、五階段生命週期(Discover → Attribute → Constrain → Inject → Verify & Close)、兩層修正(Code Auto-fix / LLM Periodic Fix)。**執行時機**:結構性 + 內容性錯誤的**偵測(Discover)都在每個 batch**(D12 Phase 2 寫入完立刻)進行,含 D6 的 OKF conformance(範圍擴大到 index 一致性等 pipeline 正確性檢查)與 Unsupported Facts/Cross-Page Contradictions(操作對象是階段2 產出的 `Claim` 頁面)——這樣新發現的約束能盡早透過 Attribute→Constrain→Inject 餵回下一個 batch 的編譯 prompt。**只有修正動作分兩種頻率**:結構性的 Code Auto-fix 每 batch 立即修;內容性的 LLM Periodic Fix 延後到**每 N 個 batch** 才批次修,平衡 LLM 成本與 D12 平行抽取換來的吞吐量。Verify & Close 頻率更低,定期重新驗證曾出錯的頁面。錯誤紀錄(ℬ,Error Book)存成獨立於 OKF bundle 之外的 pipeline 內部狀態檔案(D14),每次更新同步寫一筆事件進 `log.md`,供 D7 的稽核驗證使用。
 
 **階段 4:驗證/評估(Validate)**
-編譯/維護端的正確性,查 `index.md`(完整性、無孤兒頁面)+ `log.md`(矛盾偵測管線的稽核軌跡:注入已知矛盾 → 比對記錄算 precision/recall)(D7)。檢索/推理端的正確性,用 `M3SciQA`/`MMDocRAG` 自帶的 QA pairs 算正確率/F1,另外疊加 `MuSiQue` 做跨文件多跳推理準確率的 baseline 對照(D5)。最後跟簡單向量 RAG(回答品質)、跟 `langchain-ai/openwiki`(量化+質化,含矛盾偵測這塊它沒有的能力)做基準比較(D8)。
+編譯/維護端的正確性,查 `index.md`(完整性、無孤兒頁面;D23 之後是根層 + `claims/`/`concepts`/`documents/` 三個子目錄各自的 index 都要查)+ `log.md`(矛盾偵測管線的稽核軌跡:注入已知矛盾 → 比對記錄算 precision/recall)(D7)。檢索/推理端的正確性,用 `M3SciQA`/`MMDocRAG` 自帶的 QA pairs 算正確率/F1,另外疊加 `MuSiQue` 做跨文件多跳推理準確率的 baseline 對照(D5)。最後跟簡單向量 RAG(回答品質)、跟 `langchain-ai/openwiki`(量化+質化,含矛盾偵測這塊它沒有的能力)做基準比較(D8)。
 
 ---
 
@@ -569,7 +699,7 @@ flowchart LR
 
 - 領域延伸型別建議用 `<領域>:<Type>` 命名慣例增加可讀性(D9),不強制。
 - 優先借用既有工具與既有 benchmark(OKF conformance checker、`M3SciQA`/`MMDocRAG`/`MuSiQue` 的公開 QA pairs),不重新發明——呼應 D1/D6/D8 一路的取捨邏輯。
-- 輸出盡量保持人類可讀、可用 `cat`/`git` 直接檢視,不依賴專屬 runtime 才能理解——呼應 OKF 自己的「Human-Readable Simplicity」設計原則。
+- 輸出盡量保持人類可讀、可用 `cat`/`git` 直接檢視,不依賴專屬 runtime 才能理解——呼應 OKF spec 本身 Motivation 章節列的核心特質之一「Readable」(spec 原文列了 Readable/Parseable/Diffable/Portable 四個核心特質,以及「minimally opinionated」這個反覆出現的設計取向)。**⚠️ 2026-08-27 修正**:這裡原本寫「呼應 OKF 自己的『Human-Readable Simplicity』設計原則」,直接查 OKF spec 原文後確認 spec 裡沒有這個名詞,是先前寫作時的自創轉述被誤標成引用,已改成 spec 實際使用的措辭。
 
 ---
 
@@ -641,6 +771,15 @@ flowchart LR
 - **依序把三份大綱填成正式內容**——使用者說「好,請依序完成」。依 `ASSUMPTIONS.md` → `ARCHITECTURE.md` → `SPEC.md` 的順序填寫:`ASSUMPTIONS.md` 把 A(10 項已知範疇侷限,對應 D5/D7/D9/D10/D11/D12/D14/D15/D16)、B(4 項未查證假設,標了風險等級,B-1 deepagents skill 機制列為高風險、B-2 `contradicted_by` 平行抽取補漏率列為中風險)、C(待辦)寫完整;`ARCHITECTURE.md` 把資料模型(Raw Sources 格式、Claim/Concept 欄位表)、模組架構(Mermaid 圖 + 六個子模組介面說明)、Algorithm 1 執行流程(含逐行對應表)、Lint/Error Book(七類錯誤表、五階段生命週期、執行時機表、error_book.yaml 欄位表)、Link/Backlink(六種形式表)、驗證方式(index.md/log.md、資料集與 baseline 對照表)六節全部寫完;`SPEC.md` 濃縮成 Hypothesis(一段)、Minimal Scope(10 條精簡條列,引用 `ASSUMPTIONS.md`)、Success Criteria(Confirmed/Not confirmed 各幾條,量化門檻留給 scaffolding 決定)。三份都已同步到 POC 資料夾,取代原本的大綱版本。已更新「下一步」清單,標記這項完成,下一步指向 Phase 2 scaffolding 前先過一次 `ASSUMPTIONS.md` 的 pre-flight checklist。
 - **D19 決議:成本統計(token usage + time cost)**——使用者要求「把成本統計,包含 token usage, time cost 相關都要記錄」。決議記錄為獨立於 OKF bundle 之外的 pipeline meta-state,存進 `pipeline-state/cost_ledger.jsonl`(append-only,一行一個 JSON 事件,跟 D14 `error_book.yaml` 同一個道理),欄位含 `event_id`/`stage`/`batch_id`/`tokens_in`/`tokens_out`/`wall_clock_ms`/`timestamp`,非 LLM 步驟明確記 0 token。補上一個一路用「成本」當判準(D11/D12/D13/D17)卻從沒決議「怎麼量測記錄」的缺口,也補上 D12 自己承認「取捨沒拿真實效能數字驗證過」的缺口。最重要的影響是**幫 D8 補上第三個對照維度**:原本只比回答品質跟矛盾偵測能力,現在加上跟向量 RAG/`openwiki` 的成本量化對照,這才是真正驗證「編譯一次、持續維護」效率主張的具體數據來源。已在「已決議」段落新增 D19(D18 之後、執行方式總覽之前),標題改為「把 D1–D19 串成一條 pipeline」,同步更新 `SPEC.md`(Success Criteria 加成本/效率軸)與 `ARCHITECTURE.md`(新增第 7 節)。
 
+### 2026-08-27
+
+- **D20 決議:型別系統明確不加 `Document` 型別**——使用者問「根據 LLM Wiki 精神和其他方法,每一個 document 都應該有自己的 wiki page 是吧?」。查了四個來源:Karpathy 原始 gist 明講「writes a summary page in the wiki」,支持 per-document 頁面;但 LLM-Wiki 論文(已於 D14 採納 Algorithm 1 為執行範本)明講「Each page represents a distinct entity or concept」,per-document/per-paragraph digest 放在跟 Wiki 層分開的 `source archives`(對照 Algorithm 1 簽名的 `A`)裡,兩次獨立查證(arXiv HTML + alphaxiv 鏡像)結論一致;`openwiki`(raw/ 目錄,只合成 concept 頁)、`llm-wiki-compiler`(型別只有 `concept`/`entity`/`comparison`/`overview`,sources 只在 state.json 追蹤)兩個現成實作也都反對。四個來源三比一。使用者確認**維持現狀,不加 `Document` 型別**——D9 的 `Claim`/`Concept` 二型別視為定案。已在「已決議」段落新增 D20(D19 之後、執行方式總覽之前),更新「執行方式總覽」階段2 補一句明確排除,標題改為「把 D1–D20 串成一條 pipeline」。同步在 `ASSUMPTIONS.md` Section A 補一條範疇侷限。
+- **使用者要求 clone `nashsu/llm_wiki`**——克隆到 `knowledge-base/frameworks/llm_wiki-0.6.11/`(移除 `.git`,比照現有 framework vendoring 慣例),隨後撰寫 `analysis.md`(核心抽象、關鍵檔案地圖、可借用機制、限制、Mermaid 圖)。深入讀了 `ingest.ts`(兩步驟 CoT)、`lint.ts`/`lint-structural-core.ts`(結構性+語意性兩道無狀態 lint,沒有 Error Book)、`page-merge.ts`(三層合併保護)、`dedup.ts`(軟碰撞去重)、`graph-relevance.ts`/`graph-insights.ts`(4-signal relevance graph + Louvain community detection)、`context-budget.ts`(固定比例配額分配)、`ingest-cache.ts`(SHA256 去重快取)、`wiki-page-types.ts`(九種內建型別,**含 `source`——每份文件一頁**)、`skills.rs`(filesystem `SKILL.md` 慣例,對 B-1 風險有參考價值)、`mcp-server`。發現 `source` 型別直接牴觸剛拍板的 D20。
+- **D21 決議:新增 `Document` 核心型別,推翻 D20**——使用者要求新增「source(每份文件一頁)」。分析後確認這牴觸 D20,需要明講推翻的新決議。型別系統擴充為 `Claim`/`Concept`/`Document` 三型別,`Document` 欄位比照 D9 補充決議模式設計(`document_title`/`source_path`/`ingested_at`/`summary`/`produced_claims`/`produced_concepts`/`related_pages`)。**`summary` 生成機制的討論過程**:先提出「摺疊進 D12 Phase 1 第一個 passage 的呼叫」,查證後發現這既不是 Karpathy(gist 本身刻意抽象,沒回答實作層次問題)也不是 `nashsu/llm_wiki`(它是整份文件單一處理單位的兩階段呼叫架構,沒有「passage」這個顆粒度,不存在「第一個 passage」),而且違反設計準則 MUST 5(所有 passage 該用同一套邏輯)——自己推翻了這個提案。改採使用者指定的**遞迴 batch-reduce 演算法**:收集文件所有 `Claim.claim_text`,依 context window 預算(借用 `context-budget.ts` 的固定比例配額精神)估算是否一次放得下,放得下一次呼叫總結,放不下先分 batch 各自總結、再對 batch summary 重複同樣的預算檢查,遞迴直到收斂。不修改 D17 的 `source_ref` 語意(仍指向 raw source,不指向 wiki 頁面)。撤銷 `ASSUMPTIONS.md` A-11。已在「已決議」段落新增 D21(D20 之後),回頭在 D20 加註推翻說明,更新「執行方式總覽」階段2。
+- **D22 決議:`Merger` 具體合併機制**——使用者要求把 `page-merge.ts` 的三層保護與 `dedup.ts` 的軟碰撞去重納入 D12 `Merger` 設計,並分析是否需要決議。三層保護(陣列聯集/LLM合併+70%長度比例拒絕/`concept_title`+`type`+`created` 鎖定欄位)套用到我們自己的 `Concept`/`Claim` 欄位後,**列入這次 POC 實作範疇**——第一層是 D18 `key_facts` 增量維護的通用化,第三層是 D17/D18「決定性優先於 LLM」原則的第三次套用,都不是全新哲學。軟碰撞去重(LLM 分組偵測命名不同的同一實體)因為是每批次持續性 LLM 成本、且必要性未經驗證,比照 D16 對 skill 抽換的處理方式,**只做架構設計,這次 POC 不實作**。已在「已決議」段落新增 D22(D21 之後),更新「執行方式總覽」階段2,標題改為「把 D1–D22 串成一條 pipeline」。
+- **D23 決議:`index.md` 撰寫方式與 schema**——使用者問「`index.md` 目前的撰寫方式和 schema」,查發現這幾份文件從沒具體決議過這件事(只從驗證角度提過)。直接查證 OKF 官方 spec 後,提出四個待決問題:單一 vs 分層索引、內部分組方式、每筆條目要不要帶描述、由誰生成。使用者決議:(1) 採 OKF 的分層做法,依核心型別分子目錄(`claims/`/`concepts/`/`documents/`)各自建 `index.md`;(2)(3) 每一筆連結條目都要附一句話描述(使用者這兩點答案收斂成同一個要求);(4) 同意由 `Writer` 決定性生成,不讓 LLM 生成。過程中也查出 `ARCHITECTURE.md` 裡「D1 的 Single Index 規則」是誤標的引用(D1 原文沒講過這件事),一併修正。已在「已決議」段落新增 D23(D22 之後),更新「執行方式總覽」標題與階段2/4,`ASSUMPTIONS.md` 補一條範疇侷限。
+- **完整性檢視:對照本討論串(D1–D23)逐一檢查 `SPEC.md`/`ARCHITECTURE.md`/`ASSUMPTIONS.md` 三份文件有沒有寫完整**——使用者要求。整體結論是三份文件已忠實反映 D1–D23,但發現並修正五個具體缺口:(1) `ASSUMPTIONS.md` 少了一條 D23 的 unit test 風險項——D17(body 渲染)/D18(backlink)都有對應的「`Writer` 決定性邏輯需要 unit test,風險低」條目(B-3/B-4),但 D23 的 `index.md` 分層渲染邏輯漏了同一類條目,已補 B-6;(2) 順手補了 B-7:OKF spec 兩次直接查證(D1 附註、D23)都發現內容比先前理解豐富,但沒查到可釘住的版本號,列為低風險留意項;(3) `ARCHITECTURE.md` 的 `Concept` schema(1.3 節)沒有提到 D15「頁面不設長度上限,可能撞 context window」這個已知風險,`ASSUMPTIONS.md` A-4 有但 `ARCHITECTURE.md` 沒有對應指標,已在 1.3 節補一句指到 A-4;(4)(5) 兩個屬於 `README.md` 自身、不是三份文件的問題,但檢視過程中一併發現並修正:D17 決議原文裡「D1 的 Single Index 規則」這個誤標引用,當時只在 D23 決議段落提過、沒有回頭在 D17 原文位置註記,現已比照 D20→D21、D17→D18 的既有慣例補上「⚠️ 由 D23 修正」註記;「設計準則」SHOULD 清單裡「呼應 OKF 自己的『Human-Readable Simplicity』設計原則」這句,先前查證 OKF spec 後就發現不是 spec 原文用語(這件事在 2026-08-27 稍早就已經口頭回報給使用者但没有得到回應去修正),這次一併改成 spec 實際措辭(Readable/Parseable/Diffable/Portable 四個核心特質 + minimally opinionated)。
+
 ---
 
 ## 下一步
@@ -654,4 +793,9 @@ flowchart LR
 - [x] 2026-08-26:`ASSUMPTIONS.md` → `ARCHITECTURE.md` → `SPEC.md` 依序填成正式內容(不再是大綱),已同步到 POC 資料夾。`SPEC.md` 的 Hypothesis/Minimal Scope/Success Criteria 已濃縮完成;`ARCHITECTURE.md` 涵蓋資料模型、模組架構(含 Mermaid 圖)、Algorithm 1 執行流程、Lint/Error Book、Link/Backlink、驗證方式六節;`ASSUMPTIONS.md` 分 A(10 項已知範疇侷限)/B(4 項未查證假設,含風險等級)/C(待辦)三塊。
 - [ ] 進入 `.ai/workflows/validate-poc.md` Phase 2(scaffolding)前,先過一次 `ASSUMPTIONS.md` 的 pre-flight checklist,尤其 B-1(deepagents skill,高風險)與 B-2(`contradicted_by` 平行抽取下的補漏率)
 - [ ] 進入 `.ai/workflows/validate-poc.md` Phase 2(scaffolding),實作時留意三個已知風險:D15 的 `Concept` 頁面長度風險(留意實測 `M3SciQA`/`MMDocRAG` 數據)、D18 的 `Writer` 增量維護 backlink 邏輯需要對應的 unit test(屬於一般軟體測試範圍,不是 D13 Error Book 要抓的錯誤)、D3/D16 的 deepagents skill 機制未經查證(如果 scaffolding 時發現 deepagents 實際不支援設想的擴充方式,D3/D16 的架構需要回頭調整,不是小修小補)。
+- [x] 2026-08-27:確認型別系統是否需要補一個 `Document`(per-document)型別——查證 Karpathy gist vs LLM-Wiki 論文/`openwiki`/`llm-wiki-compiler` 後,決議(D20)維持現狀,不加,`Claim`/`Concept` 二型別定案。⚠️ 同日稍晚由 D21 推翻,見下一項。
+- [x] 2026-08-27:clone `nashsu/llm_wiki` 到 `knowledge-base/frameworks/llm_wiki-0.6.11/` 並完成 `analysis.md`。依分析發現新增 D21(推翻 D20,加 `Document` 型別 + 遞迴 batch-reduce 摘要生成機制)、D22(`Merger` 三層保護列入實作範疇,軟碰撞去重僅架構設計不實作)。
+- [ ] Phase 2 scaffolding 前,除了原本的 B-1/B-2,也要留意 D21 的遞迴 batch-reduce 收斂輪數沒有上限保護(見 `ASSUMPTIONS.md` 新增風險項)
+- [x] 2026-08-27:確認 `index.md` 的撰寫方式與 schema——查證 OKF spec 後決議(D23)改採分層索引(依 `Claim`/`Concept`/`Document` 分子目錄各自建 index)、每筆條目附一句話描述、由 `Writer` 決定性生成。順帶修正 `ARCHITECTURE.md` 誤標的「D1 Single Index 規則」講法。
+- [x] 2026-08-27:對照 D1–D23 逐一檢視 `SPEC.md`/`ARCHITECTURE.md`/`ASSUMPTIONS.md` 完整性——三份文件整體忠實反映已決議內容,補了 `ASSUMPTIONS.md` B-6(`Writer` index.md 渲染邏輯 unit test)、B-7(OKF spec 版本落差留意項),`ARCHITECTURE.md` 1.3 節補 D15 context window 風險的指標,並回頭修正 `README.md` 自身兩處遺留問題(D17 原文的「D1 Single Index」誤標、「設計準則」SHOULD 清單的「Human-Readable Simplicity」誤標)。
 - [ ] POC 結束後補 `RESULT.md` 與 `knowledge-base/decisions/<topic>.md`

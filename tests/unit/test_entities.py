@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from llm_yuki.domain.entities import Claim, Concept, ContradictionRef
+from llm_yuki.domain.entities import Claim, Concept, ContradictionRef, Source
 
 pytestmark = pytest.mark.unit
 
@@ -63,3 +63,17 @@ def test_concept_defaults_to_empty_collections() -> None:
     assert concept.aliases == []
     assert concept.key_facts == []
     assert concept.related_pages == []
+
+
+def test_source_defaults_to_empty_backlink_collections() -> None:
+    source = Source(
+        slug="doc-1",
+        source_title="Water Facts",
+        source_path="raw_sources/doc-1",
+        ingested_at="2026-08-27",
+        summary="A short document about water.",
+    )
+
+    assert source.produced_claims == []
+    assert source.produced_concepts == []
+    assert source.related_pages == []

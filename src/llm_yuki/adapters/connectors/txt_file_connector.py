@@ -8,7 +8,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from llm_yuki.logging import get_logger
 from llm_yuki.ports.connector import Connector, Document, SourceRef
+
+logger = get_logger(__name__)
 
 _IMAGE_LINK_PATTERN = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 
@@ -28,8 +31,11 @@ class TxtFileConnector(Connector):
     def list_sources(self) -> list[SourceRef]:
         """Return one SourceRef per immediate subdirectory of the Raw Sources root."""
         if not self._root.is_dir():
+            logger.warning("Raw Sources root does not exist or is not a directory: %s", self._root)
             return []
-        return [SourceRef(id=child.name) for child in sorted(self._root.iterdir()) if child.is_dir()]
+        refs = [SourceRef(id=child.name) for child in sorted(self._root.iterdir()) if child.is_dir()]
+        logger.info("listed %d raw source(s) under %s", len(refs), self._root)
+        return refs
 
     def read_source(self, ref: SourceRef) -> Document:
         """Read a document's ``.txt`` body, preserving any markdown image links found in it."""
@@ -43,6 +49,7 @@ class TxtFileConnector(Connector):
 
         text = txt_files[0].read_text(encoding="utf-8")
         image_links = _IMAGE_LINK_PATTERN.findall(text)
+        logger.debug("read source %r: %d char(s), %d image link(s)", ref.id, len(text), len(image_links))
         return Document(ref=ref, text=text, image_links=image_links)
 
     def _resolve_doc_dir(self, ref: SourceRef) -> Path:

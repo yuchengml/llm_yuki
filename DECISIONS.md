@@ -2,7 +2,7 @@
 
 > This document tracks significant *engineering/tooling* decisions made during the lifecycle of the project.
 >
-> The POC's methodology decisions (D1–D19: what to build, which corpora to test against, success criteria,
+> The POC's methodology decisions (D1–D23: what to build, which corpora to test against, success criteria,
 > etc.) are tracked separately in
 > [`docs/llm-yuki-v0.1-proposal/README.md`](./docs/llm-yuki-v0.1-proposal/README.md) — that log is the
 > authoritative source for "why does the pipeline work this way." This file is for decisions about how the
