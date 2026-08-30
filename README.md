@@ -67,6 +67,7 @@ llm_yuki/
 ├── .ai/
 │   ├── rules/            # python / testing / security rules for AI agents
 │   └── workflows/        # feature-development / bug-fix / refactoring / release-process
+├── scripts/              # standalone manual scripts, not part of the installed package — see below
 ├── repo-meta/            # ownership.yaml, dependencies.yaml
 ├── sdk/                  # REGISTRY.md — vendored/internal SDK index
 ├── .github/workflows/    # CI: lint, typecheck, test
@@ -205,6 +206,17 @@ written to a `pipeline-state` sibling of `<bundle_dir>` by default (override wit
 `--max-workers N` (default 4) caps how many Phase 1 extraction calls run concurrently (D12). Missing LLM
 configuration fails immediately at startup with a clear message, not partway through a batch. See
 `ARCHITECTURE.md` §5.
+
+`scripts/cli.py` is a thin convenience wrapper around the same `main()` for running it as a plain script
+instead of the installed console command:
+
+```bash
+poetry run python scripts/cli.py compile <source_dir> <bundle_dir>
+```
+
+`src/llm_yuki/cli.py` itself stays inside the package — `[tool.poetry.scripts]` requires the entrypoint
+module to live there to register `llm-yuki` as a console script — so this wrapper exists alongside it rather
+than replacing it.
 
 ## Run Tests
 
