@@ -712,6 +712,26 @@ D21/D22/D23 的決議實質內容(欄位設計、遞迴 batch-reduce 演算法�
 
 ---
 
+### D26. MuSiQue 子集驗證實驗:允許把 MuSiQue 的一部分透過 compile + evaluate-qa 實際跑過這套 pipeline,不等同 D5 的文獻對照數字(2026-08-31)
+
+**背景**:使用者問「MuSiQue 資料集是沒有原始文件的嗎」,釐清後發現 MuSiQue 跟 `M3SciQA`/`MMDocRAG` 的語料結構不同構——它不是一個跨題共用的固定文件集,而是每一題各自帶一組 context paragraphs(officially: 20 段短 Wikipedia 段落,只有 2–4 段是真正需要的 supporting paragraph,其餘是 distractor),25K 題各自獨立。D5 因此把它定位成「baseline,不算第三個領域」——不打算把它整個 compile 進 wiki。使用者接著問「那也可以嘗試拿來建立 bundle 並執行 evaluation?」,這條決議把這個延伸用法拍板。
+
+**決議**:允許把 MuSiQue 的一個**子集**(可設定題數,預設 20 題)透過這套 pipeline 實際 compile 成 bundle、再用 `evaluate-qa` 跑過,當作**補充實驗**,但明確跟 D5 的「文獻對照」用途分開看待:
+
+1. **資料來源**:MuSiQue 官方沒有可直接下載的 JSONL(只有 Google Drive zip,這次查證時發現這個 sandbox 環境的對外網路政策擋掉 Google Drive/HuggingFace,連不到)。改用 `OSU-NLP-Group/HippoRAG`(MIT license)repo 裡直接 commit 進版本控制的 `reproduce/dataset/musique.json`——**已直接 clone 這個 repo 查證**:1000 題的 MuSiQue dev 子集,每題帶 `question`/`answer`/`answer_aliases`/`paragraphs`(每段 `title`/`paragraph_text`/`is_supporting`),這是 HippoRAG/LightRAG/GraphRAG-Bench 一系文獻報告 MuSiQue 數字時實際使用的同一份標準化子集與語料(已用程式驗證:這 1000 題所有段落去重後,恰好等於同 repo 另一份 `musique_corpus.json` 的 11,656 筆——證實這就是文獻報告數字時用的完整語料池)。
+2. **兩種模式**:
+   - **子集模式(預設)**:隨機取樣 `--num-questions` 題(預設 20,`--seed` 固定隨機種子),只把這幾題各自帶的段落(含 distractor)攤平去重後建成 Raw Source 文件——維持「有 distractor 干擾」的檢索難度,但語料規模可控,適合先跑過一次確認 pipeline 真的可行。
+   - **全量模式**(`--full-corpus`):吃全部 1000 題、11,656 段落——這才是跟文獻數字同一個實驗設定的版本,但要透過這條 pipeline 的 LLM-backed `Extractor` compile 一萬多份文件,呼叫次數/成本規模跟 `M3SciQA`/`MMDocRAG` 同等級,這次決議**不預設執行**,留給之後視預算決定。
+3. **子集模式的數字不能拿來跟文獻對照**:D5 決議 MuSiQue 當 baseline的前提,是用「全量 1000 題 + 完整語料」這個文獻共用的實驗設定才有意義;子集模式抽樣出來的題目/語料規模不同,算出來的 EM/F1 只能證明「這套方法論在一小批多跳問答題目上能跑、能被評估」,不能寫成「贏/輸 HippoRAG 2/LightRAG/GraphRAG 幾個百分點」這種對照文獻的結論。
+
+**理由**:呼應 D4/D7 一路的 minimal-scope 紀律——在真的要花大成本跑全量之前,先用可控規模驗證「MuSiQue 這種逐題帶段落的語料結構,轉成 D10 的 Raw Source 格式、跑完整 compile→query→evaluate-qa 流程,機制本身是通的」,這件事本身值得做,但不能包裝成文獻對照實驗來誤導讀者(呼應設計準則 MUST 7,「範疇之外的假設必須顯式記錄」)。
+
+**明確排除**:全量 1000 題/11,656 段落的實際執行(留給之後視預算決定,見 `TODO.md`)、拿子集模式的數字跟 D8 對照基準(向量 RAG、`openwiki`)或既有文獻做正式比較。
+
+**影響**:新增 `scripts/musique_subset_to_raw_sources.py`(轉換腳本,不算核心 pipeline 程式碼,跟 `scripts/call_llm.py` 同一類定位)。`TODO.md` 新增追蹤項目;`docs/implementation/evaluation.md` 補上這個腳本的用法。
+
+---
+
 ## 執行方式總覽(把 D1–D24 串成一條 pipeline)
 
 這不是新決議,只是把散落在 D1–D24 的執行手法,依 pipeline 的四個階段重新排一遍,方便下一步直接對照著寫 `SPEC.md`。**模組/抽象邊界的架構圖見 D16**:下面四階段對應到 D16 的 `Connector`(階段1)→`Extractor`/`Merger`(階段2)→`Validator`/`ErrorBook`/`Fixer`(階段3)→`Writer`(貫穿階段2/3 的持久化)。

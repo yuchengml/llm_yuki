@@ -492,6 +492,21 @@ threshold), `mypy --strict` clean across all 40 source files.
       separate simple vector-RAG baseline for the D8 comparison (out of scope for the Query module itself,
       since D25 leaves embedding retrieval unimplemented — this baseline needs its own harness). See
       `docs/implementation/evaluation.md`'s "What 'done' looks like" section for the concrete task list.
+- [x] **`scripts/musique_subset_to_raw_sources.py`** (D26, 2026-08-31) — user question ("MuSiQue 資料集是沒有
+      原始文件的嗎") surfaced that MuSiQue's per-question-paragraph structure doesn't fit the "shared corpus"
+      model `M3SciQA`/`MMDocRAG` use; user then asked to try converting a MuSiQue subset into a bundle and
+      running evaluation anyway. Converts MuSiQue questions (sample mode, default 20; or `--full-corpus` for
+      all 1000) into D10 Raw Source folders + an `evaluate-qa` JSONL. Data source: `OSU-NLP-Group/HippoRAG`'s
+      `reproduce/dataset/musique.json` (MuSiQue's own Google Drive distribution was unreachable from this
+      environment's egress policy) — verified by cloning that repo directly, and by confirming programmatically
+      that its 1000 questions' paragraphs, deduplicated, exactly match its separate `musique_corpus.json`
+      (11,656 entries either way). **Verified end-to-end this session**: downloaded the real data, sampled 5
+      questions, generated 100 Raw Source documents + a QA JSONL, round-tripped both through the real
+      `TxtFileConnector.read_source`/`load_qa_examples` — confirmed genuinely valid pipeline input.
+      **Not done**: an actual `compile`/`evaluate-qa` run — no real `OPENAI_API_KEY`/`OPENAI_BASE_URL`/
+      `LLM_MODEL` available in this session. Sample-mode EM/F1 is explicitly not comparable to published
+      MuSiQue baselines (D26 decision 3) — only a `--full-corpus` run is. See `docs/implementation/
+      evaluation.md`'s "MuSiQue subset experiment" section.
 - [ ] **`T_max`/`patience` defaults (6/2) are untuned placeholders** — same treatment as D15/B-5's other
       untuned constants: validate against real `M3SciQA`/`MMDocRAG` data once available, adjust if the
       agentic loop terminates too early/late in practice.
