@@ -1,4 +1,4 @@
-.PHONY: install lint format typecheck test test-cov clean compile search query evaluate-qa musique-sample
+.PHONY: install lint format typecheck test test-cov clean compile search query evaluate-qa musique-sample musique-compile
 
 install:
 	poetry install
@@ -32,6 +32,8 @@ TOP_K ?= 8
 OUTPUT ?= report.json
 NUM_QUESTIONS ?= 20
 SEED ?= 0
+MUSIQUE_RAW_SOURCES ?= data/raw_sources/musique-sample
+MUSIQUE_BUNDLE ?= bundle-musique-sample
 
 # Needs .env (OPENAI_API_KEY/OPENAI_BASE_URL/LLM_MODEL) — see .env.example / root README.md.
 compile:
@@ -54,5 +56,10 @@ evaluate-qa:
 musique-sample:
 	poetry run python scripts/musique_subset_to_raw_sources.py \
 		--num-questions $(NUM_QUESTIONS) --seed $(SEED) \
-		--out-raw-sources data/raw_sources/musique-sample \
+		--out-raw-sources $(MUSIQUE_RAW_SOURCES) \
 		--out-qa-jsonl data/musique-sample-qa.jsonl
+
+# Compiles the MuSiQue subset from `make musique-sample` into a bundle — needs .env, run musique-sample first.
+#   make musique-compile MUSIQUE_BUNDLE=bundle-musique-sample
+musique-compile:
+	poetry run llm-yuki compile $(MUSIQUE_RAW_SOURCES) $(MUSIQUE_BUNDLE)
