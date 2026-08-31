@@ -166,6 +166,14 @@ execution — previously never actually built, despite being decided from the st
   (`domain/pipeline.py`)
 - **`llm-yuki` CLI**: `compile` wires all of the above into a real `Orchestrator` and runs one batch
   (`src/llm_yuki/cli.py`, see `ARCHITECTURE.md` §5)
+- **Query module (D25)**: `SearchStrategy`/`QueryEngine` — `StructuredSignalSearch` (structured-fields-first
+  keyword search) + RRF fusion + one-hop graph expansion, plus two swappable engines,
+  `SinglePassQueryEngine` and `IterativeAgenticQueryEngine` (`wiki_search`/`wiki_read` loop with
+  `T_max`/patience termination). Embedding retrieval is an explicit, unimplemented placeholder
+  (`adapters/query/embedding_search.py`). See `docs/implementation/query.md`.
+- **`llm-yuki` CLI**: `search` (retrieval only, no LLM needed) / `query` (full cited answer) /
+  `evaluate-qa` (EM/F1 against a QA JSONL, D5/D8) — see "Run the CLI" below and
+  `docs/implementation/evaluation.md`.
 
 Not yet built: the soft-collision dedup pass (D22, architecture-only by design — see `TODO.md`'s Out of scope
 list) and the SPEC.md validation experiments themselves (running real `M3SciQA`/`MMDocRAG` data through this
@@ -224,6 +232,22 @@ poetry run python scripts/cli.py compile <source_dir> <bundle_dir>
 `src/llm_yuki/cli.py` itself stays inside the package — `[tool.poetry.scripts]` requires the entrypoint
 module to live there to register `llm-yuki` as a console script — so this wrapper exists alongside it rather
 than replacing it.
+
+## Query an existing bundle (D25)
+
+```bash
+poetry run llm-yuki search <bundle_dir> "<query>"          # retrieval only — no .env/LLM config needed at all
+poetry run llm-yuki query <bundle_dir> "<question>"        # full cited answer — needs .env, same as compile
+poetry run llm-yuki query <bundle_dir> "<question>" --method agentic   # iterative wiki_search/wiki_read loop
+poetry run llm-yuki evaluate-qa <bundle_dir> <qa.jsonl> --output report.json   # EM/F1 against QA pairs
+```
+
+`search` is the one command that needs no `OPENAI_API_KEY`/`OPENAI_BASE_URL`/`LLM_MODEL` at all — it never
+constructs an LLM client, so it's the fastest way to sanity-check a bundle's retrieval quality or to try this
+module before setting up an LLM endpoint. `query`/`evaluate-qa` need the same `.env` as `compile` (they call
+an `AnswerSynthesizer`, and `--method agentic` also calls a `NextActionDecider`). All three are read-only —
+none of them ever writes to `<bundle_dir>`. See `docs/implementation/query.md` and
+`docs/implementation/evaluation.md`.
 
 ## Run Tests
 
