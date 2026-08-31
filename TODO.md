@@ -495,6 +495,16 @@ threshold), `mypy --strict` clean across all 40 source files.
 - [ ] **`T_max`/`patience` defaults (6/2) are untuned placeholders** — same treatment as D15/B-5's other
       untuned constants: validate against real `M3SciQA`/`MMDocRAG` data once available, adjust if the
       agentic loop terminates too early/late in practice.
+- [x] **`llm-yuki search` CLI subcommand + `domain/query.py::retrieve`** (2026-08-30, same-day follow-up) —
+      user feedback: the CLI should be able to run search on its own. `retrieve()` (search->fuse->
+      graph-expand, no synthesis) was pulled out of `SinglePassQueryEngine.answer` into a standalone public
+      function it now calls instead of duplicating the steps; `llm-yuki search <bundle_dir> "<query>"
+      [--top-k N]` runs it directly — no `OPENAI_*`/`LLM_MODEL` config needed at all, since it never
+      constructs an LLM client. This is the one query-module entry point that's actually runnable in an
+      environment with no LLM endpoint configured (verified live: `poetry run llm-yuki search <bundle>
+      "<query>"` against a manually-seeded bundle, no `.env`, real stdout). `query`/`evaluate-qa` still need
+      real LLM config (synthesis is inherently LLM-backed). 240 tests passing (up from 233), same mypy/ruff
+      clean, 93%+ coverage.
 
 ## C. Test coverage gaps (ASSUMPTIONS.md §C)
 

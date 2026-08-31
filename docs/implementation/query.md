@@ -110,15 +110,27 @@ Both borrowed verbatim (formula-wise) from `QUERY-SEARCH-SURVEY.md` §3.2 (`nash
   seeds, and dangling links (a neighbor slug not present in `corpus`) — same "not this function's job"
   treatment `MarkdownWriter._maintain_claim_backlinks` gives a dangling `related_concepts` target.
 
+## `retrieve` — search + fuse + graph-expand, no synthesis
+
+```python
+def retrieve(query, corpus, strategies, top_k=8, seed_count=5) -> list[SearchHit]:
+    rankings = [strategy.search(query, corpus, top_k) for strategy in strategies]
+    fused = reciprocal_rank_fusion(rankings)
+    graph_hits = expand_via_wikilinks(fused[:seed_count], corpus, graph_result_quota(top_k, len(fused)))
+    return _merge_hits(fused, graph_hits)[:top_k]
+```
+
+The retrieval half of `SinglePassQueryEngine`, pulled out as a standalone public function — no
+`AnswerSynthesizer`, so no LLM client is needed to run it. `SinglePassQueryEngine.answer` calls this directly
+rather than duplicating the steps; the `llm-yuki search` CLI subcommand (below) calls it too, without ever
+constructing an LLM client.
+
 ## `SinglePassQueryEngine` — the baseline
 
 ```python
 def answer(self, question, writer, batch_id, top_k=8) -> QueryAnswer:
     corpus = load_corpus(writer)
-    rankings = [strategy.search(question, corpus, top_k) for strategy in self._strategies]
-    fused = reciprocal_rank_fusion(rankings)
-    graph_hits = expand_via_wikilinks(fused[:5], corpus, graph_result_quota(top_k, len(fused)))
-    hits = _merge_hits(fused, graph_hits)[:top_k]
+    hits = retrieve(question, corpus, self._strategies, top_k=top_k, seed_count=self._seed_count)
     pages = [corpus_by_slug[hit.slug] for hit in hits if hit.slug in corpus_by_slug]
     return self._synthesizer.synthesize(question, pages, batch_id)  # wrapped into a QueryAnswer
 ```
@@ -200,11 +212,21 @@ prompt requires `cited_slugs`, unlike `nashsu/llm_wiki` which leaves citing up t
 
 ## CLI
 
-`llm-yuki query <bundle_dir> "<question>" [--method single-pass|agentic] [--top-k N] [--batch-id N]
-[--pipeline-state-dir DIR] [--t-max N] [--patience N]` — see `cli-and-cost-ledger.md`'s sibling command
-(`compile`) for the shared `.env`/LLM-config-fail-fast behavior; `query` follows the identical pattern
-(`src/llm_yuki/cli.py::_run_query`). Read-only against `bundle_dir` — never calls a `Writer.write_*` method
-(D25 decision 4: query results are not filed back into the wiki this POC).
+Three subcommands, all read-only against `bundle_dir` — none ever calls a `Writer.write_*` method (D25
+decision 4: query results are not filed back into the wiki this POC):
+
+- **`llm-yuki search <bundle_dir> "<query>" [--top-k N]`** — retrieval only (`retrieve`, above). **Needs no
+  `OPENAI_*`/`LLM_MODEL` config at all** — there is no LLM client to construct, since it never reaches
+  `AnswerSynthesizer`. Prints each hit's slug/type/title/score/matched-signal plus a one-line content
+  snippet. This is the fastest way to sanity-check a bundle's retrieval quality (or to try the Query module at
+  all without an LLM endpoint configured) — `src/llm_yuki/cli.py::_run_search`.
+- **`llm-yuki query <bundle_dir> "<question>" [--method single-pass|agentic] [--top-k N] [--batch-id N]
+  [--pipeline-state-dir DIR] [--t-max N] [--patience N]`** — full answer with citations, via whichever
+  `QueryEngine` `--method` names. See `cli-and-cost-ledger.md`'s sibling command (`compile`) for the shared
+  `.env`/LLM-config-fail-fast behavior; `query` follows the identical pattern
+  (`src/llm_yuki/cli.py::_run_query`) since it does need an LLM client for synthesis (and, for `--method
+  agentic`, for `NextActionDecider` too).
+- **`llm-yuki evaluate-qa ...`** — see `evaluation.md`. Also needs an LLM client, same reason as `query`.
 
 ## Explicitly out of scope this POC (D25)
 

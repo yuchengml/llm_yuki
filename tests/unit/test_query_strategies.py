@@ -11,6 +11,7 @@ from llm_yuki.domain.query import (
     expand_via_wikilinks,
     graph_result_quota,
     reciprocal_rank_fusion,
+    retrieve,
 )
 
 pytestmark = pytest.mark.unit
@@ -170,3 +171,36 @@ def test_expand_via_wikilinks_respects_quota() -> None:
     expanded = expand_via_wikilinks(seeds, corpus, quota=2)
 
     assert len(expanded) == 2
+
+
+# -- retrieve (search + fuse + graph-expand, no synthesis) --------------------------
+
+
+def test_retrieve_returns_direct_matches() -> None:
+    corpus = [_page("water", title="Water"), _page("fire", title="Fire")]
+
+    hits = retrieve("water", corpus, strategies=[StructuredSignalSearch()], top_k=5)
+
+    assert [hit.slug for hit in hits] == ["water"]
+
+
+def test_retrieve_pulls_in_graph_neighbors_of_top_matches() -> None:
+    corpus = [_page("water", title="Water", links=["hydrogen"]), _page("hydrogen", title="Hydrogen")]
+
+    hits = retrieve("water", corpus, strategies=[StructuredSignalSearch()], top_k=5)
+
+    assert {hit.slug for hit in hits} == {"water", "hydrogen"}
+
+
+def test_retrieve_respects_top_k() -> None:
+    corpus = [_page(f"water-{i}", title=f"Water {i}") for i in range(5)]
+
+    hits = retrieve("water", corpus, strategies=[StructuredSignalSearch()], top_k=2)
+
+    assert len(hits) == 2
+
+
+def test_retrieve_no_match_returns_empty() -> None:
+    corpus = [_page("fire", title="Fire")]
+
+    assert retrieve("oceans", corpus, strategies=[StructuredSignalSearch()], top_k=5) == []

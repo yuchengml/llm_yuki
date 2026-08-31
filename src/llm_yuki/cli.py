@@ -35,6 +35,8 @@ from llm_yuki.domain.query import (
     QueryEngine,
     SinglePassQueryEngine,
     StructuredSignalSearch,
+    load_corpus,
+    retrieve,
 )
 from llm_yuki.evaluation.qa_runner import load_qa_examples, run_qa_evaluation
 from llm_yuki.logging import configure_logging, get_logger
@@ -66,6 +68,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=4,
         help="Max concurrent Phase 1 (SelectPages/CompileWikiPages) extraction calls (D12). Default: 4.",
     )
+
+    search_parser = subparsers.add_parser(
+        "search",
+        help="Run retrieval only (StructuredSignalSearch + RRF fusion + graph expansion) against an OKF "
+        "bundle, no LLM/synthesis, no OPENAI_* config needed (D25).",
+    )
+    search_parser.add_argument("bundle_dir", type=Path, help="OKF bundle directory to read (never written to).")
+    search_parser.add_argument("query", type=str, help="The search query.")
+    search_parser.add_argument("--top-k", type=int, default=8, help="Max results to return. Default: 8.")
 
     query_parser = subparsers.add_parser("query", help="Answer one question against an existing OKF bundle (D25).")
     query_parser.add_argument("bundle_dir", type=Path, help="OKF bundle directory to read (never written to).")
@@ -129,6 +140,9 @@ def main(argv: list[str] | None = None) -> int:
         pipeline_state_dir = args.pipeline_state_dir or (args.bundle_dir.parent / "pipeline-state")
         return _run_compile(args.source_dir, args.bundle_dir, pipeline_state_dir, args.batch_id, args.max_workers)
 
+    if args.command == "search":
+        return _run_search(args)
+
     if args.command == "query":
         pipeline_state_dir = args.pipeline_state_dir or (args.bundle_dir.parent / "pipeline-state")
         return _run_query(args, pipeline_state_dir)
@@ -177,6 +191,40 @@ def _run_compile(source_dir: Path, bundle_dir: Path, pipeline_state_dir: Path, b
     error_book_store.save(error_book)
     logger.info("compile finished: batch_id=%d", batch_id)
     return 0
+
+
+def _run_search(args: argparse.Namespace) -> int:
+    """Run retrieval only — no LLM client, no ``OPENAI_*`` config needed at all (D25)."""
+    logger.info("starting search: bundle_dir=%s top_k=%d", args.bundle_dir, args.top_k)
+
+    writer = MarkdownWriter(args.bundle_dir)
+    corpus = load_corpus(writer)
+    corpus_by_slug = {page.slug: page for page in corpus}
+    hits = retrieve(args.query, corpus, strategies=[StructuredSignalSearch()], top_k=args.top_k)
+
+    if not hits:
+        print("No results.")
+        return 0
+
+    for rank, hit in enumerate(hits, start=1):
+        page = corpus_by_slug.get(hit.slug)
+        title = page.title if page is not None else "?"
+        page_type = page.page_type if page is not None else "?"
+        snippet = _snippet(page.content) if page is not None else ""
+        print(f"{rank}. [{page_type}] {hit.slug} — {title}  (score={hit.score:.4f}, via={hit.matched_field})")
+        if snippet:
+            print(f"   {snippet}")
+
+    logger.info("search finished: query=%r results=%d", args.query, len(hits))
+    return 0
+
+
+def _snippet(text: str, max_chars: int = 160) -> str:
+    """Flatten ``text`` to a single-line preview, truncated with an ellipsis if too long."""
+    flattened = " ".join(text.split())
+    if len(flattened) <= max_chars:
+        return flattened
+    return flattened[:max_chars].rsplit(" ", 1)[0] + "…"
 
 
 def _build_query_engine(

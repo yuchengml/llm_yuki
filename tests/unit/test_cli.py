@@ -6,7 +6,9 @@ from pathlib import Path
 
 import pytest
 
+from llm_yuki.adapters.writers.markdown_writer import MarkdownWriter
 from llm_yuki.cli import build_parser, main
+from llm_yuki.domain.entities import Concept
 
 pytestmark = pytest.mark.unit
 
@@ -53,6 +55,44 @@ def test_main_compile_fails_fast_without_llm_config(
     assert "OPENAI_API_KEY" in stderr
     assert "OPENAI_BASE_URL" in stderr
     assert "LLM_MODEL" in stderr
+
+
+def test_search_parses_positional_and_defaults() -> None:
+    args = build_parser().parse_args(["search", "bundle", "water"])
+
+    assert args.command == "search"
+    assert args.bundle_dir == Path("bundle")
+    assert args.query == "water"
+    assert args.top_k == 8
+
+
+def test_main_search_runs_without_any_llm_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`search` needs no OPENAI_*/LLM_MODEL config at all — retrieval never calls an LLM (D25)."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    bundle_dir = tmp_path / "bundle"
+    MarkdownWriter(bundle_dir).write_concept(
+        Concept(slug="water", concept_title="Water", summary="Water is a chemical compound.")
+    )
+
+    exit_code = main(["search", str(bundle_dir), "water"])
+
+    assert exit_code == 0
+    stdout = capsys.readouterr().out
+    assert "water" in stdout
+    assert "Water is a chemical compound." in stdout
+
+
+def test_main_search_reports_no_results(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    exit_code = main(["search", str(tmp_path / "empty-bundle"), "nothing matches"])
+
+    assert exit_code == 0
+    assert "No results." in capsys.readouterr().out
 
 
 def test_query_parses_positional_and_defaults() -> None:

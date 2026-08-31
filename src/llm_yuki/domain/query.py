@@ -295,6 +295,28 @@ def _merge_hits(*rankings: list[SearchHit]) -> list[SearchHit]:
     return merged
 
 
+def retrieve(
+    query: str,
+    corpus: list[PageRecord],
+    strategies: list[SearchStrategy],
+    top_k: int = _DEFAULT_TOP_K,
+    seed_count: int = _DEFAULT_SEED_COUNT,
+) -> list[SearchHit]:
+    """The retrieval half of :class:`SinglePassQueryEngine`, without the LLM synthesis step.
+
+    Runs every strategy, fuses via :func:`reciprocal_rank_fusion`, expands one hop via
+    :func:`expand_via_wikilinks` from the top-ranked seeds, merges both result sets, and returns the best
+    ``top_k`` — no ``AnswerSynthesizer`` involved, so this needs no LLM client at all. Exists as a standalone,
+    public function (not just inlined in ``SinglePassQueryEngine.answer``) so retrieval can be run and
+    inspected on its own — e.g. the ``llm-yuki search`` CLI subcommand, or a unit test that only cares about
+    ranking, not synthesis.
+    """
+    rankings = [strategy.search(query, corpus, top_k) for strategy in strategies]
+    fused = reciprocal_rank_fusion(rankings)
+    graph_hits = expand_via_wikilinks(fused[:seed_count], corpus, graph_result_quota(top_k, len(fused)))
+    return _merge_hits(fused, graph_hits)[:top_k]
+
+
 # -- Answer synthesis -----------------------------------------------------------
 
 
@@ -402,10 +424,7 @@ class SinglePassQueryEngine(QueryEngine):
     def answer(self, question: str, writer: Writer, batch_id: int, top_k: int = _DEFAULT_TOP_K) -> QueryAnswer:
         """Run the single-pass pipeline described in the class docstring."""
         corpus = load_corpus(writer)
-        rankings = [strategy.search(question, corpus, top_k) for strategy in self._strategies]
-        fused = reciprocal_rank_fusion(rankings)
-        graph_hits = expand_via_wikilinks(fused[: self._seed_count], corpus, graph_result_quota(top_k, len(fused)))
-        hits = _merge_hits(fused, graph_hits)[:top_k]
+        hits = retrieve(question, corpus, self._strategies, top_k=top_k, seed_count=self._seed_count)
 
         corpus_by_slug = {page.slug: page for page in corpus}
         pages = [corpus_by_slug[hit.slug] for hit in hits if hit.slug in corpus_by_slug]
