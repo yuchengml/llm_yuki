@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 from dotenv import find_dotenv, load_dotenv
@@ -27,6 +28,7 @@ from llm_yuki.adapters.llm.extractor import LLMExtractor
 from llm_yuki.adapters.llm.next_action_decider import LLMActionDecider
 from llm_yuki.adapters.merging.default_merger import DefaultMerger
 from llm_yuki.adapters.state.error_book_store import YamlErrorBookStore
+from llm_yuki.adapters.stats import compute_run_stats, snapshot_bundle, write_stats_report
 from llm_yuki.adapters.validation.default_validator import DefaultValidator
 from llm_yuki.adapters.writers.markdown_writer import MarkdownWriter
 from llm_yuki.domain.pipeline import Orchestrator
@@ -187,9 +189,28 @@ def _run_compile(source_dir: Path, bundle_dir: Path, pipeline_state_dir: Path, b
         error_book=error_book,
         max_workers=max_workers,
     )
+
+    # Snapshot before / stopwatch around run_batch: compilation statistics (D27) need "what changed in this
+    # run" and a true end-to-end wall-clock figure, neither of which the Orchestrator itself tracks (it stays
+    # domain-pure — no stats/telemetry concern threaded into it, same reasoning as cost_ledger's D19 split).
+    before_snapshot = snapshot_bundle(bundle_dir, writer)
+    started = time.monotonic()
     orchestrator.run_batch(batch_id)
+    e2e_wall_clock_ms = (time.monotonic() - started) * 1000
+
     error_book_store.save(error_book)
-    logger.info("compile finished: batch_id=%d", batch_id)
+
+    run_stats = compute_run_stats(
+        batch_id=batch_id,
+        bundle_dir=bundle_dir,
+        writer=writer,
+        cost_ledger=cost_ledger,
+        error_book=error_book,
+        e2e_wall_clock_ms=e2e_wall_clock_ms,
+        before=before_snapshot,
+    )
+    stats_path = write_stats_report(run_stats, pipeline_state_dir)
+    logger.info("compile finished: batch_id=%d, stats report: %s", batch_id, stats_path)
     return 0
 
 

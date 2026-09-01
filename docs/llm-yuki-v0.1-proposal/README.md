@@ -732,9 +732,33 @@ D21/D22/D23 的決議實質內容(欄位設計、遞迴 batch-reduce 演算法�
 
 ---
 
-## 執行方式總覽(把 D1–D24 串成一條 pipeline)
+### D27. 每次 `compile` 執行都統計 entities/concepts/sources/links/token usage/LLM 呼叫數/耗時,並輸出 `stat_<timestamp>.md` 報告(2026-09-01)
 
-這不是新決議,只是把散落在 D1–D24 的執行手法,依 pipeline 的四個階段重新排一遍,方便下一步直接對照著寫 `SPEC.md`。**模組/抽象邊界的架構圖見 D16**:下面四階段對應到 D16 的 `Connector`(階段1)→`Extractor`/`Merger`(階段2)→`Validator`/`ErrorBook`/`Fixer`(階段3)→`Writer`(貫穿階段2/3 的持久化)。
+**⚠️ 編號說明**:這則決議在 `develop` 分支上開發時原本編號為「D24」——`develop` 分岔出去的時間點,這份文件只到 D23,所以兩支分支(`develop` 這邊,跟本文件另一支正在開發 Query 模組/D25/D26 的分支)各自獨立選了「下一個可用編號」D24,互不知情。合併兩支分支時,保留分岔前就已存在的原始 D24(型別更名 `Document` → `Source`,2026-08-27)不變,把這則決議往後移到 D27(接續分支上已定案的 D25/D26)。**決議實質內容完全不變**,純粹是編號調整,不是推翻或修改。
+
+**背景**:使用者要求「每一次 compilation 執行都應該將過程統計 entities、concepts、sources、links、token usage、calling llm count、e2e compilation time、component compilation time 等等都應該被統計記錄起來,並於每一次執行後輸出,可以記錄在 `stat_<datetime/timestamp>.md`」。D19 已經決議了 token/時間成本的記錄機制(`cost_ledger.jsonl`,§7),但範疇只到「成本」——沒涵蓋知識圖譜本身的產出量(`Claim`/`Concept`/`Source` 三個核心型別各自的頁數、D17/D21 定義的 link 欄位成長量),也沒有「每次執行後自動產生人類可讀報告」這個明確產出物。此時 D9–D23 已經把核心 pipeline 實作完(`Orchestrator`/`Connector`/`Extractor`/`Merger`/`Validator`/`Fixer`/`Writer`/`cost_ledger.jsonl`/`error_book.yaml` 都是可執行的真實程式碼,不再是架構草案),所以這次決議直接對著真實的 `src/llm_yuki/` 實作,不是憑空設計。
+
+**決議**:
+
+1. **不擴充 `cost_ledger.jsonl` 的既有 schema**——`CostEvent`(D19)保持原樣(`stage`/`batch_id`/`tokens_in`/`tokens_out`/`wall_clock_ms`/`round`/`timestamp`),不新增欄位,避免動到已經穩定、有完整測試覆蓋的既有程式碼與其 `stage` 字串慣例(`Extractor.SelectPages`、`Merger.summarize_source`⋯)。改用一個新的 read-only 彙總模組(`adapters/stats.py`)在既有資料上做事後聚合:
+   - **entities/concepts/sources**:每次 `compile` 呼叫(`cli.py` 的 `--batch-id`)前後,對 `bundle_dir` 各拍一張快照(`claims/`/`concepts/`/`sources/` 三個子目錄底下的頁面 slug 集合,透過 `Writer.read_claim`/`read_concept`/`read_source` 讀回),前後集合的差集就是「這次 run 新增的頁面」,不需要改動 `Writer`/`Merger`/`Orchestrator` 介面去額外回傳 `is_new` 訊號。
+   - **links**:同一組前後快照,額外統計 `Claim.related_concepts`/`Claim.contradicted_by`/`Claim.source_ref`(非空即算 1)/`Concept.key_facts`/`Concept.related_pages`/`Concept.related_sources`/`Source.produced_claims`/`Source.produced_concepts`/`Source.related_pages` 九個 link 承載欄位的長度總和,前後差即為「這次 run 新增的 link」。**不**額外統計 body wikilink 或 `index.md` 條目——兩者都是 `Writer` 從這九個欄位決定性渲染出來的(§2.3.1/§5.4),另外算會重複計數同一條邊,不是新資訊。
+   - **token usage / LLM 呼叫數 / component 耗時**:直接讀 `cost_ledger.jsonl` 裡 `batch_id` 等於這次 run 的事件子集,依 `stage` 字串第一個 `.` 前的字首(`Extractor`/`Merger`/`Validator`/`Fixer`)分組——這個分組規則不是新發明的抽象,是直接對應 `domain/pipeline.py::Orchestrator` 實際呼叫這些子模組的地方(`Extractor` 只在 `_run_phase1` 的 `ThreadPoolExecutor` 裡被呼叫、`Merger`/`Validator` 只在序列化的 `_run_phase2` 裡、`Fixer.llm_periodic_fix` 只在批次尾端的 periodic-fix 分支),所以同時也是「這次 run 分 Phase 1/Phase 2 各花多少時間」的答案,不需要另外設計 phase 標記機制。「calling LLM count」只計 `tokens_in`/`tokens_out` 非零的事件(D19 的既有慣例:非 LLM 步驟明確記 0 token,不留空),把 `Validator.StructuralValidate` 這類走 `record_call()` 的 deterministic 呼叫排除在外。
+   - **e2e compilation time**:`cli.py` 的 `_run_compile` 直接用 `time.monotonic()` 包住整個 `orchestrator.run_batch(batch_id)` 呼叫量測——不是從 `cost_ledger.jsonl` 的事件時間戳反推(Phase 1 平行執行時多個事件的時間區間會重疊,加總/相減都不準),這是目前唯一真正貼近「整次編譯實際花了多久」的量測方式。
+   - **Error Book 交叉參照**:直接讀 `ErrorBook.entries`(D14),依 `error_type` 分組,`discovered_at_batch`/`closed_at_batch` 等於這次 `batch_id` 的筆數算「這次 run 新發現/新關閉」,`status == "open"` 的筆數算「目前未關閉總數」——不需要另外解析 `log.md` 的文字格式。
+2. **`compile` 每執行一次,產生一份 `pipeline-state/stat_<timestamp>_batch<N>.md`**——`cli.py::_run_compile` 在 `orchestrator.run_batch`/`error_book_store.save` 之後,呼叫 `compute_run_stats` 彙總、`write_stats_report` 寫檔。報告章節:Summary(一段話摘要)→ Knowledge Graph Growth(entities/concepts/sources 總量與本次新增)→ Links(九個欄位總量與本次新增)→ LLM Usage(token/呼叫數)→ Timing by Component(依上述 component 分組,含耗時佔比,Phase 1 平行時佔比可能超過 100% 有加註說明)→ Error Book Cross-Reference(僅在有錯誤事件時輸出)。
+
+**理由**:不新增 `CostEvent` 欄位、不改 `Writer`/`Orchestrator` 介面,是刻意把「統計」保持成純讀取既有資料的事後分析層——D9/D14/D19/D21/D23 定義的資料結構已經包含算出 entities/concepts/sources/links/token/耗時/錯誤統計所需的一切,不需要為了統計本身在核心 pipeline 裡插入新的 hook 或改變既有行為,把改動風險降到最低(不動任何一個既有測試會驗證行為的檔案,只新增)。「每次執行後輸出報告」直接對應 D19 決議理由第 4 點「用 `cost_ledger` 數字做量化對照」的實際落地——與其每次都手寫 ad hoc 查詢腳本,不如讓報告成為 `compile` 指令標準輸出的一部分。
+
+**明確排除**:報告只做單次 run(一次 `compile` 呼叫/一個 `batch_id`)的事後彙總,不做即時 dashboard、不做跨 run 趨勢分析(需要的話直接比較多份 `stat_*.md`,或用 `batch_id` 過濾 `cost_ledger.jsonl`);「wiki 目前累積總數」(entities/concepts/sources 從第一次 run 到現在的總量)算在報告裡(`total` 欄位),但那是快照當下讀回整個 `bundle_dir` 得到的,不是逐次累加不同 run 的差量算出來的,兩者理論上應該一致,報告本身不驗證這件事(屬於 D7 的 `index.md` 完整性驗證範疇,不是這裡的責任)。
+
+**影響**:新增 `src/llm_yuki/adapters/stats.py`(`BundleSnapshot`/`RunStats`/`compute_run_stats`/`render_stats_report`/`write_stats_report`)、擴充 `cli.py::_run_compile`(snapshot-before + 計時 + 呼叫寫報告)、新增 `tests/unit/test_stats.py` + `tests/integration/test_stats_bundle.py`,並在既有 `tests/integration/test_cli_compile.py` 補一筆「確實產出 `stat_*.md`」的斷言。`docs/implementation/cli-and-cost-ledger.md` 同步更新這個新機制。
+
+---
+
+## 執行方式總覽(把 D1–D27 串成一條 pipeline)
+
+這不是新決議,只是把散落在 D1–D23 的執行手法,依 pipeline 的四個階段重新排一遍,方便下一步直接對照著寫 `SPEC.md`(D24–D27 是後續補的型別更名/Query 模組/MuSiQue 實驗/編譯統計決議,不改變這四階段的基本形狀,不逐一併入這裡的敘述)。**模組/抽象邊界的架構圖見 D16**:下面四階段對應到 D16 的 `Connector`(階段1)→`Extractor`/`Merger`(階段2)→`Validator`/`ErrorBook`/`Fixer`(階段3)→`Writer`(貫穿階段2/3 的持久化)。
 
 **階段 1:攝入(Ingest)**
 用 connector 抽象引入原始資料來源(D2),不假設語料一開始就是乾淨的本機檔案。**預設/唯一實作的是 txt file connector**(D10),讀取的 Raw Sources 格式具體定義為:**一個資料夾 = 一份文件,內含一個 txt 正文檔 + 一個 `images/` 子資料夾,正文檔內用連結指向對應圖片**(D10 二次更正)。這代表圖片的**連結/出處被保留**(可對應到 OKF 的 `resource`/`sources[]` 欄位),但圖片**內容不做理解**(無 OCR、無 vision 解讀)——PDF→這種資料夾格式的轉換,以及圖片內容理解,兩者都明確排除在這次 POC 範疇外。核心攝入邏輯走 D3 的「基本 pipeline」;`deepagents` skill 客製化層(D3)在這次 POC 的角色縮小為「處理領域特有的文字結構差異」,不處理圖片內容理解。這次 POC 具體接的是兩個資料源:`M3SciQA`(科學論文語料)與 `MMDocRAG`(十領域長文件語料)(D5),語料已假設是前述資料夾格式——**⚠️ 需要看懂圖片內容才能回答的題目不在這次驗證的準確覆蓋範圍內**,但圖片的連結/出處仍會忠實保留在編譯出的 bundle 裡,細節見 D10。

@@ -21,7 +21,7 @@ Before starting any task, read the following documents in order:
 | [docs/implementation/](./docs/implementation/) | How each subsystem actually works today — the current mechanism, not the decision that led to it |
 
 The proposal's `README.md` ([docs/llm-yuki-v0.1-proposal/README.md](./docs/llm-yuki-v0.1-proposal/README.md))
-holds the full decision log (D1–D23) with reasoning. Consult it when a design choice in `ARCHITECTURE.md`
+holds the full decision log (D1–D27) with reasoning. Consult it when a design choice in `ARCHITECTURE.md`
 seems arbitrary — it almost certainly traces back to a decision there. `docs/implementation/` is the
 complementary layer: once you know *why*, read there for exactly *how* it's built (modules, method
 signatures, algorithms) before changing pipeline code.

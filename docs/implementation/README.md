@@ -2,7 +2,7 @@
 
 > How the pipeline actually works, in code, as of the current `src/llm_yuki/` implementation. This is a
 > different layer from [`docs/llm-yuki-v0.1-proposal/`](../llm-yuki-v0.1-proposal/), which is the discussion
-> record of *why* each decision (D1–D23) was made — that folder is not modified by these docs and should stay
+> record of *why* each decision (D1–D27) was made — that folder is not modified by these docs and should stay
 > the authoritative decision log. These docs describe *how* those decisions ended up implemented: concrete
 > modules, method signatures, algorithms, and file formats, so a reader doesn't have to reconstruct the
 > mechanism from the source tree or from a hundred decision entries.
@@ -20,7 +20,7 @@ the end-to-end flow, then drill into whichever stage you need.
 | [`validator.md`](./validator.md) | `DefaultValidator`: all 5 structural + 2 content error types, exactly what each check does |
 | [`error-book.md`](./error-book.md) | `ErrorBook`'s five-phase lifecycle, `log.md` audit-trail writes, YAML persistence |
 | [`writer.md`](./writer.md) | `MarkdownWriter`: bundle layout, body rendering, incremental backlink maintenance, D23's hierarchical `index.md` |
-| [`cli-and-cost-ledger.md`](./cli-and-cost-ledger.md) | The `llm-yuki compile` CLI, LLM client config, `cost_ledger.jsonl` |
+| [`cli-and-cost-ledger.md`](./cli-and-cost-ledger.md) | The `llm-yuki compile` CLI, LLM client config, `cost_ledger.jsonl`, D27's per-run `stat_<timestamp>.md` report |
 | [`query.md`](./query.md) | D25's Query module: `SearchStrategy`/`QueryEngine`, `StructuredSignalSearch`, RRF fusion + graph expansion, `SinglePassQueryEngine`/`IterativeAgenticQueryEngine`, the `llm-yuki query` CLI |
 | [`evaluation.md`](./evaluation.md) | The QA evaluation harness (D5/D8): EM/F1 scoring, `run_qa_evaluation`, the `llm-yuki evaluate-qa` CLI, and what's still needed for a real `M3SciQA`/`MMDocRAG` run |
 

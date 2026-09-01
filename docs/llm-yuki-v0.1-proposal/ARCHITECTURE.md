@@ -433,6 +433,30 @@ N/M 具體數值不在架構層級決定,留給 scaffolding 階段依實測效�
 
 來源:D19。
 
+### 7.5 編譯統計報告(`stat_<timestamp>.md`,D27)
+
+**觸發時機**:每次 `llm-yuki compile` 執行(對應一個 `--batch-id`),在 `Orchestrator.run_batch` 與 `error_book_store.save` 完成後,`cli.py` 呼叫報告產生器,寫入 `pipeline-state/stat_<timestamp>_batch<N>.md`。
+
+**不擴充 `CostEvent` schema**:D19 的 `cost_ledger.jsonl` 事件格式(7.2 節)保持不變。這裡新增的是一個獨立的 read-only 彙總模組(`adapters/stats.py`),事後讀取既有資料算出報告內容,不修改 `Writer`/`Orchestrator` 介面,也不在既有 stage 呼叫點插入新的統計 hook。
+
+**資料來源與彙總方式**:
+
+| 報告欄位 | 資料來源 | 算法 |
+|---|---|---|
+| entities(`Claim`)/concepts(`Concept`)/sources(`Source`)總量與本次新增 | `bundle_dir` 前後兩張快照(`compile` 呼叫前後各拍一次,透過 `Writer.read_claim`/`read_concept`/`read_source` 讀回) | 快照的頁面 slug 集合;後集合大小 = 總量,後集合減前集合 = 本次新增 |
+| links 總量與本次新增 | 同一組前後快照,加總 `Claim.related_concepts`/`Claim.contradicted_by`/`Claim.source_ref`(非空計 1)/`Concept.key_facts`/`Concept.related_pages`/`Concept.related_sources`/`Source.produced_claims`/`Source.produced_concepts`/`Source.related_pages` 九個 link 欄位長度 | 後總和 = 總量,後總和減前總和 = 本次新增。**不**另外統計 body wikilink 或 `index.md` 條目——兩者由 `Writer` 從這九個欄位決定性渲染(§2.3.1/§5.4),另計會重複計數同一條邊 |
+| token usage / LLM 呼叫次數 / component 耗時 | `cost_ledger.jsonl` 裡 `batch_id` 等於本次 run 的事件子集 | 依 `stage` 字串第一個 `.` 前的字首(`Extractor`/`Merger`/`Validator`/`Fixer`)分組加總 `tokens_in`/`tokens_out`/`wall_clock_ms`;這個字首分組同時就是 Phase 1/Phase 2 分組——`Extractor` 只在 Phase 1 的 `ThreadPoolExecutor` 裡被呼叫,`Merger`/`Validator` 只在序列化的 Phase 2 裡,`Fixer.llm_periodic_fix` 只在批次尾端的 periodic-fix 分支,對應 `domain/pipeline.py::Orchestrator` 的實際呼叫位置,不是另外設計的抽象。「LLM 呼叫次數」只計 `tokens_in`/`tokens_out` 非零的事件,排除 `Validator.StructuralValidate` 這類走 `record_call()` 的 deterministic 呼叫(呼應 7.2 節「非 LLM 步驟明確記 0」的既有慣例) |
+| e2e 編譯時間 | `cli.py::_run_compile` 用 `time.monotonic()` 直接包住整個 `orchestrator.run_batch(batch_id)` 呼叫 | 不從 `cost_ledger.jsonl` 的事件時間戳反推——Phase 1 平行執行時多個事件的時間區間會重疊,加總/相減都不準確 |
+| Error Book 交叉參照 | `ErrorBook.entries`(4.4 節) | 依 `error_type` 分組;`discovered_at_batch`/`closed_at_batch` 等於本次 `batch_id` 的筆數 = 本次新發現/新關閉;`status == "open"` 的筆數 = 目前未關閉總數。僅在本次 run 有相關事件時,報告才輸出這個章節 |
+
+**報告結構**(固定章節順序):Summary(一段話摘要)→ Knowledge Graph Growth(entities/concepts/sources)→ Links(九個欄位的表格)→ LLM Usage(token/呼叫次數)→ Timing by Component(依上表分組,含耗時佔 e2e 的百分比;`Extractor` 因 Phase 1 平行執行,累積耗時/佔比可能超過 100%,報告會加註說明這不是錯誤)→ Error Book Cross-Reference(選用章節)。
+
+**參考實作**:`src/llm_yuki/adapters/stats.py`(`BundleSnapshot`/`RunStats`/`snapshot_bundle`/`compute_run_stats`/`render_stats_report`/`write_stats_report`),接進 `cli.py::_run_compile`;測試見 `tests/unit/test_stats.py`(純邏輯:分組、渲染)與 `tests/integration/test_stats_bundle.py`(真實檔案系統:`MarkdownWriter` bundle 掃描)。
+
+**明確排除**:報告只做單次 run 的事後彙總,不做即時 dashboard、不做跨 run 趨勢分析(需要時直接比較多份 `stat_*.md`,或用 `batch_id` 過濾 `cost_ledger.jsonl`);不驗證「快照讀回的總量」與「逐次累加的差量」兩者是否一致(屬於 D7 的 `index.md` 完整性驗證範疇)。
+
+來源:D27。
+
 ---
 
 ## 8. Query 模組(檢索/查詢管線)
@@ -543,4 +567,4 @@ def answer(self, question: str, writer: Writer, top_k: int) -> QueryAnswer:
 
 ## 待補齊
 
-這份文件反映 2026-08-31 為止的決議(D1–D26)。如果之後 `README.md` 有新決議或修正既有決議,回頭同步更新對應章節,以最新版本為準。D26(MuSiQue 子集驗證實驗)是資料/評測層面的決議,不影響本文件描述的模組架構,故未另闢章節。
+這份文件反映 2026-09-01 為止的決議(D1–D27)。如果之後 `README.md` 有新決議或修正既有決議,回頭同步更新對應章節,以最新版本為準。D26(MuSiQue 子集驗證實驗)是資料/評測層面的決議,不影響本文件描述的模組架構,故未另闢章節。**編號說明**:D27(編譯統計報告,§7.5)在合併 `feature/query-search` 與 `develop` 兩支分支時,從原本各自獨立編號的「D24」重新編號而來——兩支分支從同一個只到 D23 的共同祖先分岔,各自新增決議時都選用了下一個可用編號 D24,分岔前互不知情;合併時保留分岔前就存在的原始 D24(型別更名 `Document` → `Source`,2026-08-27)不變,把這次新加入、内容完全不同的決議往後移到 D27(接續已在分支上決議的 D25/D26)。決議實質內容不變,純粹是編號調整,詳見 `README.md` 這則決議前的編號說明附註。
