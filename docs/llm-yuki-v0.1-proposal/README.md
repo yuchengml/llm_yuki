@@ -663,7 +663,31 @@ flowchart LR
 
 ---
 
-## 執行方式總覽(把 D1–D23 串成一條 pipeline)
+### D24. 每次 `compile` 執行都統計 entities/concepts/sources/links/token usage/LLM 呼叫數/耗時,並輸出 `stat_<timestamp>.md` 報告(2026-09-01)
+
+**背景**:使用者要求「每一次 compilation 執行都應該將過程統計 entities、concepts、sources、links、token usage、calling llm count、e2e compilation time、component compilation time 等等都應該被統計記錄起來,並於每一次執行後輸出,可以記錄在 `stat_<datetime/timestamp>.md`」。D19 已經決議了 token/時間成本的記錄機制(`cost_ledger.jsonl`,§7),但範疇只到「成本」——沒涵蓋知識圖譜本身的產出量(`Claim`/`Concept`/`Source` 三個核心型別各自的頁數、D17/D21 定義的 link 欄位成長量),也沒有「每次執行後自動產生人類可讀報告」這個明確產出物。此時 D9–D23 已經把核心 pipeline 實作完(`Orchestrator`/`Connector`/`Extractor`/`Merger`/`Validator`/`Fixer`/`Writer`/`cost_ledger.jsonl`/`error_book.yaml` 都是可執行的真實程式碼,不再是架構草案),所以這次決議直接對著真實的 `src/llm_yuki/` 實作,不是憑空設計。
+
+**決議**:
+
+1. **不擴充 `cost_ledger.jsonl` 的既有 schema**——`CostEvent`(D19)保持原樣(`stage`/`batch_id`/`tokens_in`/`tokens_out`/`wall_clock_ms`/`round`/`timestamp`),不新增欄位,避免動到已經穩定、有完整測試覆蓋的既有程式碼與其 `stage` 字串慣例(`Extractor.SelectPages`、`Merger.summarize_source`⋯)。改用一個新的 read-only 彙總模組(`adapters/stats.py`)在既有資料上做事後聚合:
+   - **entities/concepts/sources**:每次 `compile` 呼叫(`cli.py` 的 `--batch-id`)前後,對 `bundle_dir` 各拍一張快照(`claims/`/`concepts/`/`sources/` 三個子目錄底下的頁面 slug 集合,透過 `Writer.read_claim`/`read_concept`/`read_source` 讀回),前後集合的差集就是「這次 run 新增的頁面」,不需要改動 `Writer`/`Merger`/`Orchestrator` 介面去額外回傳 `is_new` 訊號。
+   - **links**:同一組前後快照,額外統計 `Claim.related_concepts`/`Claim.contradicted_by`/`Claim.source_ref`(非空即算 1)/`Concept.key_facts`/`Concept.related_pages`/`Concept.related_sources`/`Source.produced_claims`/`Source.produced_concepts`/`Source.related_pages` 九個 link 承載欄位的長度總和,前後差即為「這次 run 新增的 link」。**不**額外統計 body wikilink 或 `index.md` 條目——兩者都是 `Writer` 從這九個欄位決定性渲染出來的(§2.3.1/§5.4),另外算會重複計數同一條邊,不是新資訊。
+   - **token usage / LLM 呼叫數 / component 耗時**:直接讀 `cost_ledger.jsonl` 裡 `batch_id` 等於這次 run 的事件子集,依 `stage` 字串第一個 `.` 前的字首(`Extractor`/`Merger`/`Validator`/`Fixer`)分組——這個分組規則不是新發明的抽象,是直接對應 `domain/pipeline.py::Orchestrator` 實際呼叫這些子模組的地方(`Extractor` 只在 `_run_phase1` 的 `ThreadPoolExecutor` 裡被呼叫、`Merger`/`Validator` 只在序列化的 `_run_phase2` 裡、`Fixer.llm_periodic_fix` 只在批次尾端的 periodic-fix 分支),所以同時也是「這次 run 分 Phase 1/Phase 2 各花多少時間」的答案,不需要另外設計 phase 標記機制。「calling LLM count」只計 `tokens_in`/`tokens_out` 非零的事件(D19 的既有慣例:非 LLM 步驟明確記 0 token,不留空),把 `Validator.StructuralValidate` 這類走 `record_call()` 的 deterministic 呼叫排除在外。
+   - **e2e compilation time**:`cli.py` 的 `_run_compile` 直接用 `time.monotonic()` 包住整個 `orchestrator.run_batch(batch_id)` 呼叫量測——不是從 `cost_ledger.jsonl` 的事件時間戳反推(Phase 1 平行執行時多個事件的時間區間會重疊,加總/相減都不準),這是目前唯一真正貼近「整次編譯實際花了多久」的量測方式。
+   - **Error Book 交叉參照**:直接讀 `ErrorBook.entries`(D14),依 `error_type` 分組,`discovered_at_batch`/`closed_at_batch` 等於這次 `batch_id` 的筆數算「這次 run 新發現/新關閉」,`status == "open"` 的筆數算「目前未關閉總數」——不需要另外解析 `log.md` 的文字格式。
+2. **`compile` 每執行一次,產生一份 `pipeline-state/stat_<timestamp>_batch<N>.md`**——`cli.py::_run_compile` 在 `orchestrator.run_batch`/`error_book_store.save` 之後,呼叫 `compute_run_stats` 彙總、`write_stats_report` 寫檔。報告章節:Summary(一段話摘要)→ Knowledge Graph Growth(entities/concepts/sources 總量與本次新增)→ Links(九個欄位總量與本次新增)→ LLM Usage(token/呼叫數)→ Timing by Component(依上述 component 分組,含耗時佔比,Phase 1 平行時佔比可能超過 100% 有加註說明)→ Error Book Cross-Reference(僅在有錯誤事件時輸出)。
+
+**理由**:不新增 `CostEvent` 欄位、不改 `Writer`/`Orchestrator` 介面,是刻意把「統計」保持成純讀取既有資料的事後分析層——D9/D14/D19/D21/D23 定義的資料結構已經包含算出 entities/concepts/sources/links/token/耗時/錯誤統計所需的一切,不需要為了統計本身在核心 pipeline 裡插入新的 hook 或改變既有行為,把改動風險降到最低(不動任何一個既有測試會驗證行為的檔案,只新增)。「每次執行後輸出報告」直接對應 D19 決議理由第 4 點「用 `cost_ledger` 數字做量化對照」的實際落地——與其每次都手寫 ad hoc 查詢腳本,不如讓報告成為 `compile` 指令標準輸出的一部分。
+
+**明確排除**:報告只做單次 run(一次 `compile` 呼叫/一個 `batch_id`)的事後彙總,不做即時 dashboard、不做跨 run 趨勢分析(需要的話直接比較多份 `stat_*.md`,或用 `batch_id` 過濾 `cost_ledger.jsonl`);「wiki 目前累積總數」(entities/concepts/sources 從第一次 run 到現在的總量)算在報告裡(`total` 欄位),但那是快照當下讀回整個 `bundle_dir` 得到的,不是逐次累加不同 run 的差量算出來的,兩者理論上應該一致,報告本身不驗證這件事(屬於 D7 的 `index.md` 完整性驗證範疇,不是這裡的責任)。
+
+**跟型別命名的落差(誠實記錄)**:這份文件從 D21 起把第三個核心型別稱作 `Document`(`documents/` 子目錄),但實際程式碼在後續一次重構把它更名為 `Source`(`adapters/writers/markdown_writer.py`,理由是對齊 `nashsu/llm_wiki` 的 `source` 型別命名,commit 訊息:「Rename Document core type to Source」)——`ARCHITECTURE.md`/本文件先前章節尚未同步這個改名。這則決議與 `adapters/stats.py` 的程式碼一律採用實際程式碼的 `Source` 命名,不是刻意跟前面章節唱反調;回頭統一改名不在這次任務範圍內,留給下一次真的要動 D20–D23 章節時一併處理。
+
+**影響**:新增 `src/llm_yuki/adapters/stats.py`(`BundleSnapshot`/`RunStats`/`compute_run_stats`/`render_stats_report`/`write_stats_report`)、擴充 `cli.py::_run_compile`(snapshot-before + 計時 + 呼叫寫報告)、新增 `tests/unit/test_stats.py` + `tests/integration/test_stats_bundle.py`,並在既有 `tests/integration/test_cli_compile.py` 補一筆「確實產出 `stat_*.md`」的斷言。`docs/implementation/cli-and-cost-ledger.md` 同步更新這個新機制。
+
+---
+
+## 執行方式總覽(把 D1–D24 串成一條 pipeline)
 
 這不是新決議,只是把散落在 D1–D23 的執行手法,依 pipeline 的四個階段重新排一遍,方便下一步直接對照著寫 `SPEC.md`。**模組/抽象邊界的架構圖見 D16**:下面四階段對應到 D16 的 `Connector`(階段1)→`Extractor`/`Merger`(階段2)→`Validator`/`ErrorBook`/`Fixer`(階段3)→`Writer`(貫穿階段2/3 的持久化)。
 

@@ -92,6 +92,8 @@ flowchart LR
 - `adapters.fixing.default_fixer.DefaultFixer`: `Fixer` — deterministic auto-fix + LLM-backed periodic fix
 - `adapters.state.error_book_store.YamlErrorBookStore`: persists `ErrorBook` to `pipeline-state/error_book.yaml`
 - `adapters.cost_ledger.JsonlCostLedger`: append-only `pipeline-state/cost_ledger.jsonl` cost recorder (D19)
+- `adapters.stats`: read-only rollup over the bundle + `cost_ledger.jsonl` + `ErrorBook` — writes one
+  `pipeline-state/stat_<timestamp>.md` report per `compile` invocation (D24)
 
 ---
 
@@ -114,8 +116,8 @@ D3) — without touching the `Orchestrator`.
 - No domain-specific extraction/linking rules inside `Orchestrator` — that logic belongs to a per-corpus skill.
 - No writing directly into `bundle/` from anywhere except a `Writer` implementation — this is what keeps OKF
   conformance enforceable in one place.
-- No mixing of `pipeline-state/` (internal, e.g. `error_book.yaml`, `cost_ledger.jsonl`) into `bundle/`
-  (must pass OKF conformance) — see proposal `ARCHITECTURE.md` §4.4.
+- No mixing of `pipeline-state/` (internal, e.g. `error_book.yaml`, `cost_ledger.jsonl`, `stat_<timestamp>.md`)
+  into `bundle/` (must pass OKF conformance) — see proposal `ARCHITECTURE.md` §4.4.
 
 ---
 

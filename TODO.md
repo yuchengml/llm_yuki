@@ -438,6 +438,35 @@ there is no D-number/literal-text this extends, unlike B5–B8.
       default) and `LLM_YUKI_LOG_LEVEL=DEBUG`, confirming the format renders correctly, DEBUG lines are
       genuinely suppressed at INFO, and the log stream reads as a coherent narrative of the batch
 
+### B10. Compilation statistics report: entities/concepts/sources/links/token usage/LLM call count/timing, per compile run (D24, 2026-09-01) — **implemented and verified**
+
+User request: every compile run should track entities, concepts, sources, links, token usage, LLM call
+count, e2e compile time, and per-component compile time, and output a report after every run
+(`stat_<datetime>.md`). D19 already covers token/time cost recording (`cost_ledger.jsonl`) but not
+entities/concepts/sources/links, and there was no rollup-report mechanism — new decision (D24), not a
+revision of D19.
+
+- [x] New `src/llm_yuki/adapters/stats.py`: `BundleSnapshot`/`snapshot_bundle` (globs `claims/`/`concepts/`/
+      `sources/*.md`, reads pages back via `Writer.read_claim`/`read_concept`/`read_source`, sums 9
+      link-bearing frontmatter fields); `RunStats`/`compute_run_stats` (diffs two snapshots for
+      entities/concepts/sources/links, filters `cost_ledger.read_events()` to this run's `batch_id` for
+      tokens/LLM-call-count/per-component timing, cross-references `ErrorBook.entries` for lint findings);
+      `render_stats_report`/`report_filename`/`write_stats_report`
+- [x] **Deliberately does not extend `CostEvent`'s schema or touch `Writer`/`Orchestrator`** — a pure
+      read-only rollup over data D9/D14/D19/D21/D23 already produce. Component grouping (`stage.split(".",
+      1)[0]`) doubles as the Phase 1/Phase 2 breakdown for free, since `Extractor` is only ever called from
+      Phase 1's `ThreadPoolExecutor` and `Merger`/`Validator`/`Fixer` only from Phase 2/periodic-fix in
+      `domain/pipeline.py`
+- [x] `cli.py::_run_compile`: snapshot `bundle_dir` before `run_batch`, time the whole call with
+      `time.monotonic()` (not reconstructed from `cost_ledger` timestamps — Phase 1's concurrent calls
+      overlap), write the report after `error_book_store.save`
+- [x] New `tests/unit/test_stats.py` (pure logic: component grouping, error cross-referencing, report
+      rendering) + `tests/integration/test_stats_bundle.py` (real `MarkdownWriter` bundle + `JsonlCostLedger`
+      round trip); `tests/integration/test_cli_compile.py` gained an assertion that a `stat_*.md` file is
+      actually produced
+- [x] Full `mypy --strict`/`ruff`/`pytest` sweep (179 passed, 93.8% coverage, `adapters/stats.py` itself at
+      96%)
+
 ## C. Test coverage gaps (ASSUMPTIONS.md §C)
 
 - [x] Unit tests for **B-3**: `Writer` incremental backlink maintenance (`key_facts` field) — already covered

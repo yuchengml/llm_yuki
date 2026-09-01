@@ -31,6 +31,8 @@ def test_compile_with_no_sources_wires_pipeline_and_exits_zero(tmp_path: Path, m
     assert exit_code == 0
     assert (bundle_dir / "log.md").exists()  # MarkdownWriter initializes this on construction
     assert (tmp_path / "pipeline-state" / "error_book.yaml").exists()
+    stats_files = list((tmp_path / "pipeline-state").glob("stat_*.md"))
+    assert len(stats_files) == 1  # D24: one compilation-statistics report per compile invocation
 
 
 def test_compile_respects_explicit_pipeline_state_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

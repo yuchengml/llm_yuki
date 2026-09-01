@@ -10,11 +10,11 @@
 
 提案的核心假設:以 [OKF (Open Knowledge Format)](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) 規格與 Karpathy 原始 LLM Wiki 三層架構(Raw Sources / Wiki / Schema)為基礎,補上「lint 診斷矛盾 → 根因歸因 → 針對性修正」的差異化機制,把來源文件編譯成一份持續存在、可累積、可雙向連結的結構化知識庫,取代「每次查詢都重新檢索、重新推理」的傳統 RAG 模式 —— 且這套方法論設計上領域無關,可以在特質差異大的領域間移植。
 
-完整背景、已決議事項(D1–D23)、架構細節、範疇與成功判準都在提案文件裡:
+完整背景、已決議事項(D1–D24)、架構細節、範疇與成功判準都在提案文件裡:
 
 | 文件 | 內容 |
 |---|---|
-| [`docs/llm-yuki-v0.1-proposal/README.md`](./docs/llm-yuki-v0.1-proposal/README.md) | 討論稿(scratchpad):動機、已決議事項 D1–D23 |
+| [`docs/llm-yuki-v0.1-proposal/README.md`](./docs/llm-yuki-v0.1-proposal/README.md) | 討論稿(scratchpad):動機、已決議事項 D1–D24 |
 | [`docs/llm-yuki-v0.1-proposal/ARCHITECTURE.md`](./docs/llm-yuki-v0.1-proposal/ARCHITECTURE.md) | Implementation-ready 架構參考(資料模型、模組、演算法、lint、link/backlink、成本統計) |
 | [`docs/llm-yuki-v0.1-proposal/SPEC.md`](./docs/llm-yuki-v0.1-proposal/SPEC.md) | POC Hypothesis、Minimal Scope、Success Criteria |
 | [`docs/llm-yuki-v0.1-proposal/ASSUMPTIONS.md`](./docs/llm-yuki-v0.1-proposal/ASSUMPTIONS.md) | 已知範疇侷限與未查證假設清單 |
@@ -43,6 +43,9 @@
   避免 body/frontmatter 不一致;`index.md` 依核心型別分層(根目錄 + `claims/`/`concepts/`/`sources/` 三份
   子目錄各自的 `index.md`,D23)
 - 成本統計(`cost_ledger.jsonl`),用於跟向量 RAG、`openwiki` 做量化對照
+- 每次 `compile` 執行後自動產生編譯統計報告(`pipeline-state/stat_<timestamp>.md`,D24):entities/concepts/
+  sources 總量與本次新增、link 欄位成長量、token usage、LLM 呼叫次數、依 component 分組的耗時、Error Book
+  交叉參照(`adapters/stats.py`)
 
 ---
 
@@ -157,6 +160,11 @@ execution — previously never actually built, despite being decided from the st
   Attribute/VerifyAndClose call (§4.4) (`domain/error_book.py`, `adapters/state/error_book_store.py`)
 - **Cost tracking**: `JsonlCostLedger` records every LLM call's token usage/latency, including `Source.summary`'s
   batch-reduce rounds (`adapters/cost_ledger.py`)
+- **Compilation statistics (D24)**: `adapters/stats.py` snapshots the bundle before/after each `compile`
+  invocation to compute entities/concepts/sources/links produced this run, cross-references the run's
+  `cost_ledger.jsonl` slice for token usage/LLM call count/per-component timing, and cross-references the
+  `ErrorBook` for lint findings discovered/closed this run — rendered to
+  `pipeline-state/stat_<timestamp>_batch<N>.md` after every `compile` call
 - **`Orchestrator`**: runs Algorithm 1 as D12's two phases — Phase 1 (`SelectPages`/`CompileWikiPages`) in
   parallel across every passage in the batch (`ThreadPoolExecutor`, `max_workers`), Phase 2 (`Merger`/
   `Validator`/`ErrorBook`/`Fixer`/writes) sequentially per passage to avoid concurrent write conflicts;
@@ -202,11 +210,11 @@ poetry run llm-yuki compile <source_dir> <bundle_dir>
 `export` it into the shell yourself; a real environment variable always takes precedence over the `.env`
 value if both are set. Runs one compile batch (Algorithm 1) over `<source_dir>` (a Raw Sources folder — one
 subfolder per document, each with a `.txt` body, split into natural paragraphs — D11) and writes the
-resulting OKF bundle to `<bundle_dir>`. Pipeline-internal state (`error_book.yaml`, `cost_ledger.jsonl`) is
-written to a `pipeline-state` sibling of `<bundle_dir>` by default (override with `--pipeline-state-dir`).
-`--max-workers N` (default 4) caps how many Phase 1 extraction calls run concurrently (D12). Missing LLM
-configuration fails immediately at startup with a clear message, not partway through a batch. See
-`ARCHITECTURE.md` §5.
+resulting OKF bundle to `<bundle_dir>`. Pipeline-internal state (`error_book.yaml`, `cost_ledger.jsonl`,
+`stat_<timestamp>_batch<N>.md`, D24) is written to a `pipeline-state` sibling of `<bundle_dir>` by default
+(override with `--pipeline-state-dir`). `--max-workers N` (default 4) caps how many Phase 1 extraction calls
+run concurrently (D12). Missing LLM configuration fails immediately at startup with a clear message, not
+partway through a batch. See `ARCHITECTURE.md` §5.
 
 Operational console logging (`src/llm_yuki/logging.py`) writes timestamped progress lines to stderr as the
 batch runs — batch/phase progress at `INFO`, per-passage/per-LLM-call detail at `DEBUG`. Set
@@ -287,7 +295,7 @@ This repository is AI-Native: it follows the
 | `.ai/rules/` | Coding, testing, security rules |
 | `.ai/workflows/` | Step-by-step task workflows |
 | `repo-meta/` | Machine-readable ownership/dependency metadata |
-| `docs/llm-yuki-v0.1-proposal/` | The POC's methodology, decisions (D1–D23), spec, and known assumptions |
+| `docs/llm-yuki-v0.1-proposal/` | The POC's methodology, decisions (D1–D24), spec, and known assumptions |
 | `docs/implementation/` | How each subsystem actually works today — one file per module, complementary to the proposal above |
 
 AI agents must read `AGENTS.md` before taking any action in this repository.

@@ -1,8 +1,9 @@
 # CLI and Cost Ledger
 
-Three mechanisms that don't belong to any single pipeline stage: how the whole thing gets invoked
-(`llm_yuki.cli`), how every LLM-backed call's cost gets recorded (`adapters/cost_ledger.py`, D19), and
-operational console logging (`llm_yuki.logging`) for watching a run happen in real time.
+Four mechanisms that don't belong to any single pipeline stage: how the whole thing gets invoked
+(`llm_yuki.cli`), how every LLM-backed call's cost gets recorded (`adapters/cost_ledger.py`, D19), how a
+whole run's statistics get rolled up into a report (`adapters/stats.py`, D24), and operational console
+logging (`llm_yuki.logging`) for watching a run happen in real time.
 
 ## The `llm-yuki` CLI
 
@@ -21,7 +22,7 @@ llm-yuki compile <source_dir> <bundle_dir> [--batch-id N] [--pipeline-state-dir 
 | `source_dir` | required | Raw Sources root — one subfolder per document, each a `.txt` body + optional `images/` |
 | `bundle_dir` | required | Output OKF bundle directory (see `writer.md`) |
 | `--batch-id` | `1` | Passed straight through to `Orchestrator.run_batch` — see `pipeline-overview.md` |
-| `--pipeline-state-dir` | `<bundle_dir's parent>/pipeline-state` | Where `error_book.yaml`/`cost_ledger.jsonl` live |
+| `--pipeline-state-dir` | `<bundle_dir's parent>/pipeline-state` | Where `error_book.yaml`/`cost_ledger.jsonl`/`stat_<timestamp>.md` live |
 | `--max-workers` | `4` | Caps Phase 1's `ThreadPoolExecutor` concurrency — see `pipeline-overview.md` |
 
 ### `main()` / `_run_compile()` — what actually happens
@@ -56,8 +57,19 @@ def _run_compile(source_dir, bundle_dir, pipeline_state_dir, batch_id, max_worke
         fixer=DefaultFixer(llm_client, cost_ledger),
         error_book=error_book, max_workers=max_workers,
     )
+
+    before_snapshot = snapshot_bundle(bundle_dir, writer)
+    started = time.monotonic()
     orchestrator.run_batch(batch_id)
+    e2e_wall_clock_ms = (time.monotonic() - started) * 1000
+
     error_book_store.save(error_book)
+
+    run_stats = compute_run_stats(
+        batch_id=batch_id, bundle_dir=bundle_dir, writer=writer, cost_ledger=cost_ledger,
+        error_book=error_book, e2e_wall_clock_ms=e2e_wall_clock_ms, before=before_snapshot,
+    )
+    write_stats_report(run_stats, pipeline_state_dir)
     return 0
 ```
 
@@ -148,6 +160,69 @@ small JSON line.
 `read_events() -> list[CostEvent]` reads and parses the whole file (empty list if it doesn't exist yet) — used
 by tests and any future cost-rollup tooling. There's no partial/streaming read; for this POC's scale, reading
 the whole file back is fine.
+
+## Compilation Statistics (D24)
+
+Module: `src/llm_yuki/adapters/stats.py`. Answers "what did this run actually produce, and what did it
+cost" as one Markdown report — `pipeline-state/stat_<timestamp>_batch<N>.md`, written once per `compile`
+invocation, right after `error_book_store.save(error_book)` in `_run_compile`. Purely a read-only rollup
+over data the rest of the pipeline already produces (the bundle itself, `cost_ledger.jsonl`, the in-memory
+`ErrorBook`) — it does not change `CostEvent`'s schema, does not touch `Writer`/`Orchestrator`, and never
+writes to `bundle/`.
+
+```python
+class PageStats(BaseModel):
+    total: int             # pages of this core type in bundle_dir right now
+    new_this_run: int       # present after this run, absent before it
+
+class LinkFieldStats(BaseModel):
+    field: str               # e.g. "Claim.related_concepts"
+    total: int
+    added_this_run: int
+
+class ComponentStats(BaseModel):
+    component: str           # "Extractor" / "Merger" / "Validator" / "Fixer"
+    phase_label: str          # inferred from where Orchestrator actually calls that component
+    call_count: int
+    tokens_in: int
+    tokens_out: int
+    wall_clock_ms: float
+    pct_of_e2e: float | None
+
+class RunStats(BaseModel):
+    batch_id: int
+    e2e_wall_clock_ms: float
+    claims: PageStats
+    concepts: PageStats
+    sources: PageStats
+    link_fields: list[LinkFieldStats]
+    components: list[ComponentStats]
+    llm_call_count: int
+    tokens_in_total: int
+    tokens_out_total: int
+    errors: list[ErrorTypeRunStats]
+```
+
+### How each number is computed
+
+| Stat | Source | How |
+|---|---|---|
+| `claims`/`concepts`/`sources` | `bundle_dir` before/after `run_batch` (`snapshot_bundle`) | Glob `claims/`/`concepts/`/`sources/*.md` (excluding `index.md`) for slugs, read each back via `Writer.read_claim`/`read_concept`/`read_source`. `total` = after-snapshot size; `new_this_run` = after − before (set difference) |
+| `link_fields` | Same two snapshots | Sum the length of each of 9 link-bearing frontmatter fields (`Claim.related_concepts`/`contradicted_by`/`source_ref`, `Concept.key_facts`/`related_pages`/`related_sources`, `Source.produced_claims`/`produced_concepts`/`related_pages`) across every page of that type; `added_this_run` = after-total − before-total. Body wikilinks/`index.md` entries are **not** counted separately — the `Writer` renders both deterministically from these same fields (§2.3.1/§5.4), so counting them too would double-count |
+| `components`/`tokens_*`/`llm_call_count` | `cost_ledger.read_events()`, filtered to `batch_id == this run's batch_id` | Grouped by `stage.split(".", 1)[0]` — which, because `Extractor` is only ever called from Phase 1's `ThreadPoolExecutor` and `Merger`/`Validator`/`Fixer` only from Phase 2/periodic-fix, doubles as the Phase 1 vs. Phase 2 breakdown for free. `llm_call_count` only counts events with nonzero tokens (excludes `Validator.StructuralValidate`'s `record_call()` timing-only events) |
+| `e2e_wall_clock_ms` | `cli.py`'s own `time.monotonic()` around `orchestrator.run_batch(batch_id)` | Not reconstructed from `cost_ledger` timestamps — Phase 1's concurrent calls have overlapping timestamps, so min/max subtraction would be wrong |
+| `errors` | The in-memory `ErrorBook.entries` (not `log.md`) | Grouped by `error_type`; `discovered_at_batch`/`closed_at_batch == batch_id` → this-run counts; `status == "open"` → currently-open total |
+
+`Extractor`'s wall-clock/`pct_of_e2e` can legitimately exceed 100% — it runs in parallel (D12), so several
+calls' durations sum to more than the wall-clock time they actually took; `render_stats_report` adds a note
+explaining this rather than letting it read as a bug.
+
+### Report structure
+
+Fixed section order: Summary (one auto-generated sentence) → Knowledge Graph Growth (claims/concepts/sources
+totals + this-run deltas) → Links (the 9-field table) → LLM Usage (tokens/call count) → Timing by Component
+→ Error Book Cross-Reference (only rendered when the run actually touched the Error Book). See
+`render_stats_report`/`report_filename`/`write_stats_report` for the exact Markdown produced.
 
 ## Operational Logging
 
