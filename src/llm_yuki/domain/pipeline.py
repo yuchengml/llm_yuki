@@ -9,8 +9,9 @@ that swapping in real implementations later requires no change to this file.
 from __future__ import annotations
 
 import abc
+from collections import deque
 from collections.abc import Iterable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -22,6 +23,7 @@ from llm_yuki.ports.connector import Connector
 from llm_yuki.ports.writer import Writer
 
 _DEFAULT_MAX_WORKERS = 4
+_DEFAULT_MAX_CONCURRENT_DOCUMENTS = 4
 
 logger = get_logger(__name__)
 """Operational/console logging only (see logging.py) — distinct from ErrorBook's log.md audit trail, and not
@@ -149,11 +151,19 @@ class Orchestrator:
 
     Domain-agnostic by construction: it only calls the interfaces above plus the ``Connector``/``Writer``
     ports — never anything corpus-specific (AGENTS.md §4, proposal README.md D3). Execution follows D12's
-    two-phase strategy: Phase 1 (``SelectPages``/``CompileWikiPages``) runs in parallel across every passage
-    in the batch, each comparing against the same read-only ``Writer`` snapshot (nothing is written until
-    Phase 2 starts, so "current Writer state" and "the Phase 1 snapshot" are the same thing here); Phase 2
+    two-phase strategy: Phase 1 (``SelectPages``/``CompileWikiPages``) runs across every passage in the
+    batch, each comparing against the same read-only ``Writer`` snapshot (nothing is written until Phase 2
+    starts, so "current Writer state" and "the Phase 1 snapshot" are the same thing here); Phase 2
     (``Merger``/``Validator``/``ErrorBook``/``Fixer``/``ApplyUpdates``) then runs sequentially, one passage
     at a time, to avoid concurrent write conflicts (D12).
+
+    Phase 1's own concurrency is two-level (extends D12, not a new decision — see TODO.md's dated note):
+    at most ``max_concurrent_documents`` sources are "open" (have passages submitted to the pool) at once,
+    and a single ``ThreadPoolExecutor`` of size ``max_workers`` — which may be larger than the document
+    window — drains whichever passages belong to the currently-open sources. This bounds how many documents
+    are "in flight" at once (useful when each document is large and you want predictable memory/log
+    footprint) while still letting many workers race through one document's passages in parallel, or spread
+    across several open documents, whichever the pool schedules first. See :meth:`_run_phase1`.
     """
 
     def __init__(
@@ -166,6 +176,7 @@ class Orchestrator:
         fixer: Fixer,
         error_book: ErrorBook,
         max_workers: int = _DEFAULT_MAX_WORKERS,
+        max_concurrent_documents: int = _DEFAULT_MAX_CONCURRENT_DOCUMENTS,
     ) -> None:
         self._connector = connector
         self._writer = writer
@@ -175,6 +186,7 @@ class Orchestrator:
         self._fixer = fixer
         self._error_book = error_book
         self._max_workers = max_workers
+        self._max_concurrent_documents = max_concurrent_documents
 
     def run_batch(self, batch_id: int) -> None:
         """Algorithm 1, lines 1-17, over every passage of every source in the Connector's current batch."""
@@ -241,14 +253,68 @@ class Orchestrator:
             )
 
     def _run_phase1(self, passages: list[_Passage], constraints: list[str], batch_id: int) -> list[_Phase1Result]:
-        """D12 Phase 1: ``SelectPages``/``CompileWikiPages`` in parallel across every passage in the batch."""
+        """D12 Phase 1: ``SelectPages``/``CompileWikiPages`` across every passage in the batch.
+
+        Two-level sliding-window scheduling: at most ``max_concurrent_documents`` sources are "open" (all
+        their passages submitted to the pool) at any moment; as soon as every one of an open source's
+        passages finishes, the next queued source is opened. A single ``max_workers``-sized pool is shared
+        across whichever sources are currently open, so it may exceed the document window (many workers
+        racing through one document) or sit below the passage count of the open sources (workers spread
+        across several documents at once) — either way this bounds "documents in flight" independently of
+        "worker count". Always fully drains (every source opened, every passage completed) before returning,
+        preserving D12's "Phase 1 fully precedes Phase 2" guarantee. Returned list is reordered back to the
+        original ``passages`` order (document order, then passage index) regardless of completion order,
+        since Phase 2 and callers depend on that order.
+        """
         if not passages:
             return []
         workers = min(self._max_workers, len(passages))
-        logger.info("batch %d: Phase 1 — extracting %d passage(s), max_workers=%d", batch_id, len(passages), workers)
+
+        passages_by_source: dict[str, list[_Passage]] = {}
+        for passage in passages:
+            passages_by_source.setdefault(passage.source_slug, []).append(passage)
+        source_queue: deque[str] = deque(passages_by_source.keys())
+        document_window = min(self._max_concurrent_documents, len(source_queue))
+
+        logger.info(
+            "batch %d: Phase 1 — extracting %d passage(s) across %d source(s), "
+            "max_concurrent_documents=%d, max_workers=%d",
+            batch_id,
+            len(passages),
+            len(source_queue),
+            document_window,
+            workers,
+        )
+
+        results_by_passage: dict[_Passage, _Phase1Result] = {}
+        remaining_by_source: dict[str, int] = {}
+
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = [pool.submit(self._extract_one, passage, constraints, batch_id) for passage in passages]
-            return [future.result() for future in futures]
+            pending: dict[Future[_Phase1Result], _Passage] = {}
+
+            def open_next_source() -> None:
+                if not source_queue:
+                    return
+                source_slug = source_queue.popleft()
+                source_passages = passages_by_source[source_slug]
+                remaining_by_source[source_slug] = len(source_passages)
+                for source_passage in source_passages:
+                    future = pool.submit(self._extract_one, source_passage, constraints, batch_id)
+                    pending[future] = source_passage
+
+            for _ in range(document_window):
+                open_next_source()
+
+            while pending:
+                done, _ = wait(pending.keys(), return_when=FIRST_COMPLETED)
+                for future in done:
+                    passage = pending.pop(future)
+                    results_by_passage[passage] = future.result()
+                    remaining_by_source[passage.source_slug] -= 1
+                    if remaining_by_source[passage.source_slug] == 0:
+                        open_next_source()
+
+        return [results_by_passage[passage] for passage in passages]
 
     def _extract_one(self, passage: _Passage, constraints: list[str], batch_id: int) -> _Phase1Result:
         """Algorithm 1 lines 1-3 for one passage — the unit of work Phase 1 parallelizes over."""

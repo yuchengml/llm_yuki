@@ -7,6 +7,7 @@ testable without a real Connector/Writer.
 from __future__ import annotations
 
 import threading
+import time
 
 import pytest
 
@@ -177,3 +178,85 @@ def test_phase1_runs_passages_from_different_sources_concurrently() -> None:
     )
 
     orchestrator.run_batch(batch_id=1)  # would raise BrokenBarrierError (timeout) if Phase 1 were sequential
+
+
+class _PartyBarrierExtractor(Extractor):
+    """Like ``_BarrierExtractor`` but for an arbitrary party count — proves exactly ``parties`` Phase 1 calls
+    are genuinely in flight together (a timeout means fewer than ``parties`` were running concurrently)."""
+
+    def __init__(self, parties: int) -> None:
+        self._barrier = threading.Barrier(parties, timeout=5)
+
+    def select_pages(self, passage: str, writer: Writer, batch_id: int) -> list[str]:
+        return []
+
+    def compile_wiki_pages(
+        self, passage: str, selected: list[str], constraints: list[str], batch_id: int
+    ) -> CompiledUpdate:
+        self._barrier.wait()
+        return CompiledUpdate()
+
+
+def test_phase1_runs_one_documents_passages_concurrently_when_worker_pool_exceeds_document_window() -> None:
+    """A single open document's passages can still saturate a worker pool larger than the document window:
+    with ``max_concurrent_documents=1`` and ``max_workers=3``, this one document's 3 passages must all run
+    concurrently (barrier requires all 3 parties) even though only one *document* is ever open at a time."""
+    orchestrator = Orchestrator(
+        connector=_FakeConnector({"doc-a": "First paragraph.\n\nSecond paragraph.\n\nThird paragraph."}),
+        writer=_FakeWriter(),
+        extractor=_PartyBarrierExtractor(parties=3),
+        merger=_PassthroughMerger(),
+        validator=_NoopValidator(),
+        fixer=_NoopFixer(),
+        error_book=_NeverDueErrorBook(),
+        max_workers=3,
+        max_concurrent_documents=1,
+    )
+
+    orchestrator.run_batch(batch_id=1)  # would time out if the 3 passages of this one open document ran serially
+
+
+class _ConcurrencyTrackingExtractor(Extractor):
+    """Records the max number of Phase 1 calls ever observed in flight at once — used to prove
+    ``max_concurrent_documents`` actually bounds how many *documents* are open, not just worker count."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._current = 0
+        self.max_observed = 0
+
+    def select_pages(self, passage: str, writer: Writer, batch_id: int) -> list[str]:
+        return []
+
+    def compile_wiki_pages(
+        self, passage: str, selected: list[str], constraints: list[str], batch_id: int
+    ) -> CompiledUpdate:
+        with self._lock:
+            self._current += 1
+            self.max_observed = max(self.max_observed, self._current)
+        time.sleep(0.05)
+        with self._lock:
+            self._current -= 1
+        return CompiledUpdate()
+
+
+def test_phase1_never_opens_more_documents_than_max_concurrent_documents() -> None:
+    """4 single-passage documents, plenty of workers (4), but only 2 documents allowed open at once: the
+    observed concurrency must peak at 2, never reach 4 — proving the document window is enforced
+    independently of the (larger) worker pool."""
+    extractor = _ConcurrencyTrackingExtractor()
+    orchestrator = Orchestrator(
+        connector=_FakeConnector({"doc-a": "a", "doc-b": "b", "doc-c": "c", "doc-d": "d"}),
+        writer=_FakeWriter(),
+        extractor=extractor,
+        merger=_PassthroughMerger(),
+        validator=_NoopValidator(),
+        fixer=_NoopFixer(),
+        error_book=_NeverDueErrorBook(),
+        max_workers=4,
+        max_concurrent_documents=2,
+    )
+
+    orchestrator.run_batch(batch_id=1)
+
+    assert extractor.max_observed == 2

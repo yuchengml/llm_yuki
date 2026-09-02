@@ -33,8 +33,9 @@
   (D11);產出共享核心型別 `Claim` / `Concept` / `Source`(OKF typed frontmatter)—— `Source` 是每份 Raw
   Source 專屬的導覽頁,`summary` 由遞迴 batch-reduce 生成,彙整該文件**所有段落**產出的 `Claim`(D21)
 - 執行策略分兩階段(D12):**Phase 1 平行**(`SelectPages`/`CompileWikiPages`,同批次每個段落各自比對同一份
-  wiki index 快照,`ThreadPoolExecutor` 實作,worker 數可由 CLI `--max-workers` 調整)、**Phase 2 序列化**
-  (`Merger`/`Validator`/`ErrorBook`/`Fixer`/寫入,依序執行避免並發寫入衝突)
+  wiki index 快照,`ThreadPoolExecutor` 實作,兩層並行控制——最多同時開啟幾份文件由 CLI
+  `--max-concurrent-documents` 調整、共用 worker pool 大小由 `--max-workers` 調整,兩者互相獨立)、**Phase 2
+  序列化**(`Merger`/`Validator`/`ErrorBook`/`Fixer`/寫入,依序執行避免並發寫入衝突)
 - `Merger` 三層合併保護:陣列欄位聯集(決定性)/ `Concept.summary` 衝突時 LLM 合併 + 70% 長度比例拒絕 / 鎖定
   欄位(`concept_title`)不受 LLM 輸出影響(D22)
 - 兩層 lint:OKF conformance(結構性,含跨 `Claim`/`Concept`/`Source` 的 slug 碰撞檢查)+ 自訂跨頁矛盾偵測
@@ -165,8 +166,9 @@ execution — previously never actually built, despite being decided from the st
   `cost_ledger.jsonl` slice for token usage/LLM call count/per-component timing, and cross-references the
   `ErrorBook` for lint findings discovered/closed this run — rendered to
   `pipeline-state/stat_<timestamp>_batch<N>.md` after every `compile` call
-- **`Orchestrator`**: runs Algorithm 1 as D12's two phases — Phase 1 (`SelectPages`/`CompileWikiPages`) in
-  parallel across every passage in the batch (`ThreadPoolExecutor`, `max_workers`), Phase 2 (`Merger`/
+- **`Orchestrator`**: runs Algorithm 1 as D12's two phases — Phase 1 (`SelectPages`/`CompileWikiPages`) across
+  every passage in the batch, two-level concurrency (`ThreadPoolExecutor`, `max_workers`) shared across at
+  most `max_concurrent_documents` "open" sources at once — see `pipeline-overview.md`, Phase 2 (`Merger`/
   `Validator`/`ErrorBook`/`Fixer`/writes) sequentially per passage to avoid concurrent write conflicts;
   creates each source's `Source` page once Phase 1 is done, and finalizes its `summary` once every one of
   that document's passages has gone through Phase 2; deterministically anchors every compiled
@@ -220,9 +222,11 @@ value if both are set. Runs one compile batch (Algorithm 1) over `<source_dir>` 
 subfolder per document, each with a `.txt` body, split into natural paragraphs — D11) and writes the
 resulting OKF bundle to `<bundle_dir>`. Pipeline-internal state (`error_book.yaml`, `cost_ledger.jsonl`,
 `stat_<timestamp>_batch<N>.md`, D27) is written to a `pipeline-state` sibling of `<bundle_dir>` by default
-(override with `--pipeline-state-dir`). `--max-workers N` (default 4) caps how many Phase 1 extraction calls
-run concurrently (D12). Missing LLM configuration fails immediately at startup with a clear message, not
-partway through a batch. See `ARCHITECTURE.md` §5.
+(override with `--pipeline-state-dir`). Phase 1 concurrency has two independent knobs (D12): `--max-workers N`
+(default 4) caps the shared extraction thread pool, and `--max-concurrent-documents N` (default 4) caps how
+many source documents may be "open" (have passages submitted to that pool) at once — see
+`docs/implementation/pipeline-overview.md`. Missing LLM configuration fails immediately at startup with a
+clear message, not partway through a batch. See `ARCHITECTURE.md` §5.
 
 Operational console logging (`src/llm_yuki/logging.py`) writes timestamped progress lines to stderr as the
 batch runs — batch/phase progress at `INFO`, per-passage/per-LLM-call detail at `DEBUG`. Set

@@ -91,13 +91,56 @@ This is the proposal's two-stage execution strategy, and it maps directly onto t
 
 ### Phase 1 — `_run_phase1` / `_extract_one`
 
+Phase 1's concurrency is two-level: a **document window** (how many sources may be "open" — have passages
+submitted to the pool — at once) and a **worker pool** (how many extraction calls may physically run at
+once). They're independent knobs, not one derived from the other: with a worker pool larger than the
+document window, several workers can race through one open document's passages; with a document window
+smaller than the passage count of the open documents, some passages simply queue for a worker to free up.
+This extends D12's original "flatten every passage into one pool" design (still true: Phase 1 fully
+completes, for every source, before Phase 2 starts) — see `TODO.md`'s dated note for why this isn't a new
+D-numbered decision.
+
 ```python
 def _run_phase1(self, passages, constraints, batch_id) -> list[_Phase1Result]:
     if not passages:
         return []
-    with ThreadPoolExecutor(max_workers=min(self._max_workers, len(passages))) as pool:
-        futures = [pool.submit(self._extract_one, passage, constraints, batch_id) for passage in passages]
-        return [future.result() for future in futures]
+    workers = min(self._max_workers, len(passages))
+
+    passages_by_source: dict[str, list[_Passage]] = {}
+    for passage in passages:
+        passages_by_source.setdefault(passage.source_slug, []).append(passage)
+    source_queue: deque[str] = deque(passages_by_source.keys())
+    document_window = min(self._max_concurrent_documents, len(source_queue))
+
+    results_by_passage: dict[_Passage, _Phase1Result] = {}
+    remaining_by_source: dict[str, int] = {}
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        pending: dict[Future[_Phase1Result], _Passage] = {}
+
+        def open_next_source() -> None:
+            if not source_queue:
+                return
+            source_slug = source_queue.popleft()
+            source_passages = passages_by_source[source_slug]
+            remaining_by_source[source_slug] = len(source_passages)
+            for source_passage in source_passages:
+                future = pool.submit(self._extract_one, source_passage, constraints, batch_id)
+                pending[future] = source_passage
+
+        for _ in range(document_window):
+            open_next_source()
+
+        while pending:
+            done, _ = wait(pending.keys(), return_when=FIRST_COMPLETED)
+            for future in done:
+                passage = pending.pop(future)
+                results_by_passage[passage] = future.result()
+                remaining_by_source[passage.source_slug] -= 1
+                if remaining_by_source[passage.source_slug] == 0:
+                    open_next_source()
+
+    return [results_by_passage[passage] for passage in passages]
 
 def _extract_one(self, passage, constraints, batch_id) -> _Phase1Result:
     selected = self._extractor.select_pages(passage.text, self._writer, batch_id)
@@ -105,20 +148,36 @@ def _extract_one(self, passage, constraints, batch_id) -> _Phase1Result:
     return _Phase1Result(passage=passage, selected=selected, update=update)
 ```
 
-- Every passage in the batch — regardless of which source it came from — is submitted to one
-  `ThreadPoolExecutor` and processed concurrently. `max_workers` is a constructor argument (CLI: `--max-workers`,
-  default 4); the pool is capped to `min(max_workers, len(passages))` so a small batch doesn't spin up idle
-  threads.
+- Passages are grouped by `source_slug` first. A `deque` of source slugs acts as the queue of "not yet
+  opened" documents; up to `document_window = min(max_concurrent_documents, len(source_queue))` sources are
+  opened immediately (every one of their passages submitted to the shared pool). Whenever an open source's
+  passage count reaches zero (all its passages have a result), `open_next_source()` pulls the next queued
+  source and submits its passages too — so the number of open documents never exceeds
+  `max_concurrent_documents`, but never sits at zero either (a new one opens the instant one finishes).
+  `max_concurrent_documents` is a constructor argument (CLI: `--max-concurrent-documents`, default 4).
+- The pool itself is sized `min(max_workers, len(passages))` (`max_workers`, CLI: `--max-workers`, default
+  4) and is **shared** across whichever documents are currently open — it is not "N workers per document".
+  A pool larger than the document window lets many workers saturate one document's passages at once; a pool
+  smaller than the open documents' combined passage count just means some of those passages queue inside
+  the pool until a worker frees up (`ThreadPoolExecutor`'s ordinary submission queue — no polling needed).
 - **Genuinely concurrent, not just structurally separated.** `concurrent.futures.ThreadPoolExecutor` uses real
   OS threads; Python's GIL releases during I/O (an HTTP call to the LLM endpoint, a file read), so multiple
-  `Extractor` calls actually overlap in wall-clock time. This is proven by a dedicated test
-  (`tests/unit/test_orchestrator.py::test_phase1_runs_passages_from_different_sources_concurrently`) that uses
-  a 2-party `threading.Barrier` — a fake `Extractor.compile_wiki_pages` blocks until *two* calls are in
-  flight at once; a sequential Orchestrator would deadlock and time out instead of completing. Deterministic
-  pass/fail, not timing-based.
-- `future.result()` is collected **in submission order**, not completion order — so `phase1_results` is
-  always in the same order as `passages` (source order, then paragraph order), regardless of which thread
-  happened to finish first. This is what makes Phase 2's iteration order deterministic.
+  `Extractor` calls actually overlap in wall-clock time. Three dedicated tests in
+  `tests/unit/test_orchestrator.py` prove this, all using `threading.Barrier`/timing (deterministic pass/fail,
+  not flaky):
+  - `test_phase1_runs_passages_from_different_sources_concurrently` — two single-passage documents, default
+    window (4) ≥ 2 sources, so both open at once; a 2-party barrier would time out if Phase 1 were serial.
+  - `test_phase1_runs_one_documents_passages_concurrently_when_worker_pool_exceeds_document_window` — one
+    document with 3 passages, `max_concurrent_documents=1` but `max_workers=3`: a 3-party barrier proves a
+    single open document's passages still run fully concurrently when the pool is larger than the window.
+  - `test_phase1_never_opens_more_documents_than_max_concurrent_documents` — 4 single-passage documents,
+    `max_workers=4` but `max_concurrent_documents=2`: a shared counter proves observed concurrency peaks at
+    exactly 2, never 4, so the document window is enforced independently of the (larger) worker pool.
+- `results_by_passage` is a `dict[_Passage, _Phase1Result]` (`_Passage` is a frozen/hashable dataclass, so
+  it's usable as a key directly) populated in **completion order**, but the final return statement
+  re-reads it by iterating the original `passages` list — so `phase1_results` is always in the same order as
+  `passages` (source order, then paragraph order), regardless of which document opened first or which
+  passage's thread happened to finish first. This is what makes Phase 2's iteration order deterministic.
 - **Read-only against `Writer`.** Nothing is written to the bundle during Phase 1 — `select_pages`/
   `compile_wiki_pages` only ever call `writer.list_pages()`/`read_claim()`/`read_concept()`. Since nothing
   changes underneath it, "the writer's current state during Phase 1" and "a snapshot taken at the start of

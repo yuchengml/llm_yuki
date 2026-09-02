@@ -555,6 +555,43 @@ revision of D19.
       96%) — on `develop` before this merge; re-run after merging with B10's work above, see the merge
       commit's own sweep numbers.
 
+### B12. Phase 1 two-level concurrency: bound "documents open at once" independently of worker-pool size (2026-09-02) — **implemented and verified**
+
+User request: with real batches, Phase 1's original flat design (every passage of every source submitted to
+one pool at once, D12/B-3) made "how many documents are being touched right now" and "how many workers exist"
+the same number — no way to keep memory/log footprint predictable for a big document while still letting
+many workers race through its passages, or vice versa. Extends D12's Phase 1 scheduling (not a new
+D-numbered decision — the phase split, the "fully completes before Phase 2" guarantee, and the "read-only
+against a stable snapshot" property are all unchanged, only *which passages get submitted when* changes).
+
+- [x] `domain/pipeline.py::Orchestrator`: new constructor param `max_concurrent_documents` (CLI
+      `--max-concurrent-documents`, default 4, same default as `max_workers`) alongside the existing
+      `max_workers`. `_run_phase1` restructured into sliding-window scheduling: passages grouped by
+      `source_slug`; up to `max_concurrent_documents` sources "open" (all their passages submitted to one
+      shared `ThreadPoolExecutor`) at once; `concurrent.futures.wait(..., return_when=FIRST_COMPLETED)` drives
+      a loop that opens the next queued source the instant an open source's passages all finish. `max_workers`
+      sizes the pool and is independent of the document window — can exceed it (many workers on one open
+      document) or sit below the open documents' combined passage count (passages simply queue for a free
+      worker, no polling). Final result list is reconstructed in original `passages` order (a
+      `dict[_Passage, _Phase1Result]`, keyed off `_Passage`'s frozen/hashable dataclass) regardless of
+      completion order — preserves the pre-existing invariant Phase 2 and its tests depend on.
+- [x] `cli.py`: `--max-concurrent-documents` flag, threaded through `_run_compile` into `Orchestrator`; INFO
+      log line reports both knobs.
+- [x] `tests/unit/test_orchestrator.py`: the pre-existing 2-party-barrier concurrency proof
+      (`test_phase1_runs_passages_from_different_sources_concurrently`) still passes unmodified under the new
+      defaults (2 sources ≤ default window of 4, so both still open immediately). Two new deterministic
+      tests: `test_phase1_runs_one_documents_passages_concurrently_when_worker_pool_exceeds_document_window`
+      (3-party barrier, one document/3 passages, `max_concurrent_documents=1`/`max_workers=3` — proves a
+      worker pool larger than the document window still saturates one open document's passages) and
+      `test_phase1_never_opens_more_documents_than_max_concurrent_documents` (a locked shared counter across
+      4 single-passage documents, `max_workers=4`/`max_concurrent_documents=2` — proves observed concurrency
+      peaks at exactly 2, never 4).
+- [x] `docs/implementation/pipeline-overview.md`: Phase 1 section rewritten for the two-level model (full
+      `_run_phase1` code, the three concurrency tests, the document-window/worker-pool interaction).
+      Root `README.md`/`ARCHITECTURE.md` and `docs/implementation/cli-and-cost-ledger.md` updated wherever
+      they described the old flat `--max-workers`-only behavior.
+- [x] Full `mypy --strict`/`ruff check .`/`pytest` sweep: 261 passed, no lint/type errors.
+
 ## C. Test coverage gaps (ASSUMPTIONS.md §C)
 
 - [x] Unit tests for **B-3**: `Writer` incremental backlink maintenance (`key_facts` field) — already covered

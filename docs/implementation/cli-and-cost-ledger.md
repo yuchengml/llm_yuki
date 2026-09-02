@@ -15,6 +15,7 @@ POC (root `ARCHITECTURE.md` §5).
 
 ```
 llm-yuki compile <source_dir> <bundle_dir> [--batch-id N] [--pipeline-state-dir DIR] [--max-workers N]
+                  [--max-concurrent-documents N]
 ```
 
 | Argument | Default | Meaning |
@@ -23,7 +24,8 @@ llm-yuki compile <source_dir> <bundle_dir> [--batch-id N] [--pipeline-state-dir 
 | `bundle_dir` | required | Output OKF bundle directory (see `writer.md`) |
 | `--batch-id` | `1` | Passed straight through to `Orchestrator.run_batch` — see `pipeline-overview.md` |
 | `--pipeline-state-dir` | `<bundle_dir's parent>/pipeline-state` | Where `error_book.yaml`/`cost_ledger.jsonl`/`stat_<timestamp>.md` live |
-| `--max-workers` | `4` | Caps Phase 1's `ThreadPoolExecutor` concurrency — see `pipeline-overview.md` |
+| `--max-workers` | `4` | Size of the shared Phase 1 `ThreadPoolExecutor`, drawn from whichever documents are open — see `pipeline-overview.md` |
+| `--max-concurrent-documents` | `4` | Caps how many source documents may be "open" in Phase 1 at once, independent of `--max-workers` — see `pipeline-overview.md` |
 
 ### `main()` / `_run_compile()` — what actually happens
 
@@ -34,9 +36,12 @@ def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "compile":
         pipeline_state_dir = args.pipeline_state_dir or (args.bundle_dir.parent / "pipeline-state")
-        return _run_compile(args.source_dir, args.bundle_dir, pipeline_state_dir, args.batch_id, args.max_workers)
+        return _run_compile(
+            args.source_dir, args.bundle_dir, pipeline_state_dir, args.batch_id,
+            args.max_workers, args.max_concurrent_documents,
+        )
 
-def _run_compile(source_dir, bundle_dir, pipeline_state_dir, batch_id, max_workers) -> int:
+def _run_compile(source_dir, bundle_dir, pipeline_state_dir, batch_id, max_workers, max_concurrent_documents) -> int:
     try:
         llm_client = OpenAICompatibleClient.from_env()
     except LLMConfigError as exc:
@@ -56,6 +61,7 @@ def _run_compile(source_dir, bundle_dir, pipeline_state_dir, batch_id, max_worke
         validator=DefaultValidator(llm_client, cost_ledger),
         fixer=DefaultFixer(llm_client, cost_ledger),
         error_book=error_book, max_workers=max_workers,
+        max_concurrent_documents=max_concurrent_documents,
     )
 
     before_snapshot = snapshot_bundle(bundle_dir, writer)

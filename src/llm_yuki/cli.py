@@ -68,7 +68,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-workers",
         type=int,
         default=4,
-        help="Max concurrent Phase 1 (SelectPages/CompileWikiPages) extraction calls (D12). Default: 4.",
+        help="Size of the shared Phase 1 extraction thread pool (SelectPages/CompileWikiPages calls), drawn "
+        "from whichever sources are currently open — may exceed --max-concurrent-documents so several "
+        "workers can race through one document's passages (D12). Default: 4.",
+    )
+    compile_parser.add_argument(
+        "--max-concurrent-documents",
+        type=int,
+        default=4,
+        help="Max number of source documents 'open' (passages submitted to the pool) at once during Phase "
+        "1; the next queued document opens as soon as an open one's passages all finish. Default: 4.",
     )
 
     search_parser = subparsers.add_parser(
@@ -140,7 +149,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "compile":
         pipeline_state_dir = args.pipeline_state_dir or (args.bundle_dir.parent / "pipeline-state")
-        return _run_compile(args.source_dir, args.bundle_dir, pipeline_state_dir, args.batch_id, args.max_workers)
+        return _run_compile(
+            args.source_dir,
+            args.bundle_dir,
+            pipeline_state_dir,
+            args.batch_id,
+            args.max_workers,
+            args.max_concurrent_documents,
+        )
 
     if args.command == "search":
         return _run_search(args)
@@ -156,7 +172,14 @@ def main(argv: list[str] | None = None) -> int:
     raise AssertionError(f"unhandled command: {args.command}")  # unreachable: argparse enforces required=True
 
 
-def _run_compile(source_dir: Path, bundle_dir: Path, pipeline_state_dir: Path, batch_id: int, max_workers: int) -> int:
+def _run_compile(
+    source_dir: Path,
+    bundle_dir: Path,
+    pipeline_state_dir: Path,
+    batch_id: int,
+    max_workers: int,
+    max_concurrent_documents: int,
+) -> int:
     """Wire every pipeline stage into a real ``Orchestrator`` and run one batch."""
     try:
         llm_client = OpenAICompatibleClient.from_env()
@@ -166,11 +189,12 @@ def _run_compile(source_dir: Path, bundle_dir: Path, pipeline_state_dir: Path, b
         return 1
 
     logger.info(
-        "starting compile: source_dir=%s bundle_dir=%s batch_id=%d max_workers=%d",
+        "starting compile: source_dir=%s bundle_dir=%s batch_id=%d max_workers=%d max_concurrent_documents=%d",
         source_dir,
         bundle_dir,
         batch_id,
         max_workers,
+        max_concurrent_documents,
     )
 
     connector = TxtFileConnector(source_dir)
@@ -188,6 +212,7 @@ def _run_compile(source_dir: Path, bundle_dir: Path, pipeline_state_dir: Path, b
         fixer=DefaultFixer(llm_client, cost_ledger),
         error_book=error_book,
         max_workers=max_workers,
+        max_concurrent_documents=max_concurrent_documents,
     )
 
     # Snapshot before / stopwatch around run_batch: compilation statistics (D27) need "what changed in this

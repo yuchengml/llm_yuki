@@ -48,10 +48,12 @@ flowchart LR
 ### 2.1 `llm_yuki.domain` — core logic, no I/O
 
 - `Orchestrator`: runs the compile loop (Algorithm 1; see proposal `ARCHITECTURE.md` §3) as D12's two phases —
-  Phase 1 (`SelectPages`/`CompileWikiPages`) runs concurrently across every passage in the batch
-  (`concurrent.futures.ThreadPoolExecutor`, `max_workers`), read-only against `Writer`; Phase 2 (`Merger`/
-  `Validator`/`ErrorBook`/`Fixer`/writes) runs sequentially, one passage at a time, to avoid concurrent write
-  conflicts
+  Phase 1 (`SelectPages`/`CompileWikiPages`) runs across every passage in the batch with two independent
+  concurrency knobs: `max_concurrent_documents` bounds how many source documents are "open" at once, and a
+  shared `concurrent.futures.ThreadPoolExecutor` (`max_workers`) drains whichever passages belong to the
+  currently-open documents — see `docs/implementation/pipeline-overview.md`. Read-only against `Writer`;
+  Phase 2 (`Merger`/`Validator`/`ErrorBook`/`Fixer`/writes) runs sequentially, one passage at a time, to avoid
+  concurrent write conflicts
 - `passage_splitter.split_into_natural_paragraphs`: default blank-line-delimited natural-paragraph splitter
   (D11) — the `Orchestrator`'s extraction unit, not a fixed-length chunker; per-corpus splitting stays
   delegated to a future domain skill (D3)
@@ -142,7 +144,8 @@ D3) — without touching the `Orchestrator`.
 Pipeline execution is exposed as a **CLI first** — `llm_yuki.cli` (installed as the `llm-yuki` script; see
 `pyproject.toml` `[tool.poetry.scripts]`). No web/API service is planned for this POC. The `compile`
 subcommand wires every concrete adapter (§2.3) into a real `Orchestrator` and runs one batch end to end;
-`--max-workers` (default 4) caps Phase 1's concurrency (D12); missing/invalid LLM configuration
+`--max-workers` (default 4) caps the shared Phase 1 worker pool and `--max-concurrent-documents` (default 4)
+caps how many source documents may be open at once (D12, extended — see `TODO.md`'s dated note); missing/invalid LLM configuration
 (`OPENAI_API_KEY`/`OPENAI_BASE_URL`/`LLM_MODEL`) fails fast at startup with a clear error, before any batch
 work starts, rather than partway through one. The `query` subcommand (D25) reads an existing `bundle_dir`
 (no write access) and answers one question via `--method single-pass` (default) or `--method agentic`,
