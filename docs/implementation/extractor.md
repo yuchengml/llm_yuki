@@ -57,7 +57,16 @@ Sends the passage text, the `selected` slugs from the previous call (as a bare l
 each selected page's full content, only that they exist and are relevant), and `constraints` (the batch's
 `active_constraints()` — see `error-book.md`). Response is parsed into a `CompiledUpdate` via
 `adapters/llm/compiled_update_parsing.py::parse_compiled_update`, which validates the JSON against the
-`Claim`/`Concept` Pydantic schemas and raises `LLMOutputError` on anything that doesn't fit.
+`Claim`/`Concept` Pydantic schemas — **per candidate, independently**: a single malformed Claim or Concept
+(a required field the LLM omitted, e.g.) is logged (`WARNING`) and dropped, not treated as a reason to
+discard every other candidate in the same response, so one bad item in an otherwise-good response doesn't
+lose the rest of that passage's real extractions. `LLMOutputError` is still raised, and still fatal to this
+passage, only when the payload is structurally broken (`claims`/`concepts` not even a list) — that's not "one
+bad item," it's not a response this function can make sense of at all. See `TODO.md`'s dated note: the
+original all-or-nothing validation meant one malformed `Concept` anywhere in a batch could abort the entire
+`compile` run (uncaught all the way up through `Orchestrator.run_batch`/the CLI), silently losing every other
+passage's successfully-extracted work too — this fix is scoped to the parsing layer only, not a change to
+Phase 1's concurrency or error propagation.
 
 ## The system prompts, verbatim
 

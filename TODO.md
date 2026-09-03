@@ -711,6 +711,51 @@ did this (`- [slug](slug.md) — description`); body link sections (`## Related 
       `- [slug](path) — description` line, in `tests/integration/test_markdown_writer.py`.
 - [x] Full `mypy --strict`/`ruff check .`/`pytest` sweep: 264 passed (1 net new), no lint/type errors.
 
+### B16. Don't let one malformed Claim/Concept abort an entire compile run (2026-09-03) — **implemented and verified**
+
+Real crash reported by the user running `make musique-compile` against live MuSiQue data:
+
+```
+llm_yuki.adapters.llm.errors.LLMOutputError: Extractor.CompileWikiPages: response did not match Claim/Concept schema: 1 validation error for Concept
+concept_title
+  Field required [type=missing, input_value={'aliases': ['Mt. Hood'], ...}, input_type=dict]
+```
+
+Root cause: `adapters/llm/compiled_update_parsing.py::parse_compiled_update` validated the whole
+`claims`/`concepts` list as one all-or-nothing Pydantic pass — one malformed item anywhere raised
+`LLMOutputError` and discarded every other, otherwise-valid candidate in the same response. Nothing catches
+that exception between there and the CLI: it propagates through `_extract_one` → a `ThreadPoolExecutor`
+future → `_run_phase1`'s `future.result()` → `Orchestrator.run_batch` → `cli.py::_run_compile` (which only
+catches `LLMConfigError`, a startup-time config problem, not this) — so one bad LLM response for *one
+passage* aborted the *entire* batch, discarding every other passage's/document's already-successful
+extraction along with it (nothing had reached Phase 2/`Writer` yet — see `pipeline-overview.md`).
+
+User confirmed the fix direction via `AskUserQuestion`: validate each candidate independently, skip the
+malformed ones, keep the rest — not passage-level skip-and-continue, not an LLM retry loop (both offered as
+alternatives, not chosen).
+
+- [x] `parse_compiled_update`: each `Claim`/`Concept` in the response is now validated **independently** — a
+      `ValidationError` on one item logs a `WARNING` (`"%s: skipping malformed %s %r: %s"`, includes the raw
+      item and the Pydantic error) and drops just that item; every other valid candidate in the same response
+      is kept. Still raises `LLMOutputError` — still fatal — only when the payload is structurally broken
+      (`claims`/`concepts` not even a list), since that's not "one bad item," it's not a response this
+      function can make sense of at all. Used by both `LLMExtractor.compile_wiki_pages` and
+      `DefaultFixer.llm_periodic_fix` (shared parsing, see the module's own docstring) — both benefit.
+- [x] **Deliberately not changed**: Phase 1's concurrency/error-propagation model (`domain/pipeline.py`), and
+      whether a passage that *does* still hit a structurally-broken response should be caught at the
+      `_extract_one`/`Orchestrator` level instead of propagating — that was one of the alternatives put to the
+      user and not chosen this round; still a real remaining gap (a genuinely malformed, non-JSON, or
+      non-list response for one passage can still abort the whole batch) worth revisiting if it recurs.
+- [x] `tests/integration/test_llm_extractor.py`: replaced `test_compile_wiki_pages_raises_on_schema_mismatch`
+      (asserted the old all-or-nothing raise — no longer true) with
+      `test_compile_wiki_pages_skips_malformed_item_keeps_the_rest` (one malformed claim + one malformed
+      concept + one valid concept in the same response → only the valid concept survives) and
+      `test_compile_wiki_pages_raises_on_non_list_claims` (the still-fatal structural case).
+- [x] `docs/implementation/extractor.md` updated to describe per-candidate validation instead of
+      all-or-nothing.
+- [x] Full `mypy --strict`/`ruff check .`/`pytest` sweep: 265 passed (net +1: one test replaced by two, minus
+      the one removed), no lint/type errors.
+
 ## C. Test coverage gaps (ASSUMPTIONS.md §C)
 
 - [x] Unit tests for **B-3**: `Writer` incremental backlink maintenance (`key_facts` field) — already covered

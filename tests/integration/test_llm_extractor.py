@@ -155,8 +155,39 @@ def test_compile_wiki_pages_parses_claims_and_concepts(tmp_path: Path) -> None:
     assert events[0].batch_id == 2
 
 
-def test_compile_wiki_pages_raises_on_schema_mismatch(tmp_path: Path) -> None:
-    client = _FakeLLMClient(content=json.dumps({"claims": [{"slug": "x"}], "concepts": []}))
+def test_compile_wiki_pages_skips_malformed_item_keeps_the_rest(tmp_path: Path) -> None:
+    """A single malformed Claim/Concept (missing required fields) is dropped, not treated as a reason to
+    discard every other candidate in the same response — real-world failure that motivated this: one
+    Concept missing concept_title used to abort an entire batch, losing every other passage's work too
+    (see TODO.md's dated note)."""
+    payload = {
+        "claims": [{"slug": "x"}],  # missing claim_text/source_ref/confidence/provenance_state
+        "concepts": [
+            {"slug": "bad"},  # missing concept_title/summary
+            {
+                "slug": "water",
+                "concept_title": "Water",
+                "aliases": [],
+                "tags": [],
+                "summary": "A chemical compound.",
+                "related_pages": [],
+                "related_sources": [],
+            },
+        ],
+    }
+    client = _FakeLLMClient(content=json.dumps(payload))
+    extractor = LLMExtractor(client, _ledger(tmp_path))  # type: ignore[arg-type]
+
+    update = extractor.compile_wiki_pages("passage", selected=[], constraints=[], batch_id=1)
+
+    assert update.claims == []
+    assert [c.slug for c in update.concepts] == ["water"]
+
+
+def test_compile_wiki_pages_raises_on_non_list_claims(tmp_path: Path) -> None:
+    """Still fatal: a structurally broken payload isn't "one bad item," it's not a response this function
+    can make sense of at all."""
+    client = _FakeLLMClient(content=json.dumps({"claims": "not-a-list", "concepts": []}))
     extractor = LLMExtractor(client, _ledger(tmp_path))  # type: ignore[arg-type]
 
     with pytest.raises(LLMOutputError):
