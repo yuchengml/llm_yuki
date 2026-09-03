@@ -64,7 +64,7 @@ Water boils at 100C at sea level.
 <!-- llm-yuki:sections -->
 
 ## Related Pages
-- [water](../concepts/water.md)
+- [water](../concepts/water.md) — A common chemical compound.
 
 ## Related Sources
 - doc-1#p0
@@ -95,15 +95,15 @@ internal implementation detail no prompt ever mentions to the LLM.
 
 ## Body rendering — deterministic, never LLM-generated
 
-Every `write_*` call renders the body from that same call's in-memory model fields, via a static
-`_render_*_body` method — `## Related Pages` / `## Related Sources` / `## Key Facts` / `## Produced Claims` /
-`## Produced Concepts` / `## Contradicted By` sections all come from this, never independently asked of an
-LLM. This is what keeps body and frontmatter from ever drifting apart, and avoids an entire class of
-consistency-check that would otherwise be needed (D17). A section is omitted entirely (not rendered as an
-empty heading) when its source list is empty — e.g. a `Claim` with no `related_concepts` gets no
-`## Related Pages` heading at all. The content field (`claim_text`/`summary`) is always the first thing
+Every `write_*` call renders the body from that same call's in-memory model fields, via a
+`_render_*_body` instance method — `## Related Pages` / `## Related Sources` / `## Key Facts` /
+`## Produced Claims` / `## Produced Concepts` / `## Contradicted By` sections all come from this, never
+independently asked of an LLM. This is what keeps body and frontmatter from ever drifting apart, and avoids
+an entire class of consistency-check that would otherwise be needed (D17). A section is omitted entirely (not
+rendered as an empty heading) when its source list is empty — e.g. a `Claim` with no `related_concepts` gets
+no `## Related Pages` heading at all. The content field (`claim_text`/`summary`) is always the first thing
 rendered, right after the title — it's the *only* place that field is written to disk at all, see "Page file
-format" above.
+format" above. (No longer `@staticmethod`, unlike the module's other renderers — see below.)
 
 Every one of those cross-page links — plus every `index.md` entry (see below) — is rendered by the
 module-level `_wiki_link(slug, from_dir, to_dir)` helper as a **standard markdown link**,
@@ -113,14 +113,33 @@ fixed as a `TODO.md`-dated note, see there for the full before/after). `_CLAIMS_
 `_SOURCES_DIR` are flat sibling directories directly under the bundle root, so the relative path is always
 either same-directory (`<slug>.md`, e.g. a `Concept`'s `related_pages` linking to another `Concept`) or one
 level over (`../<other_dir>/<slug>.md`, e.g. a `Source`'s `produced_claims` linking into `claims/`) — never
-any deeper nesting. Every slug-shaped link field now gets this same treatment, including two that initially
+any deeper nesting. Every slug-shaped link field gets this same treatment, including two that initially
 didn't (found and fixed as a direct follow-up, once the first pass surfaced the inconsistency): a `Claim`'s
-`contradicted_by` renders under its own `## Contradicted By` heading (`- [slug](path) — reason`, kept
-separate from `## Related Pages` since D17 calls this a conflict, not a relation), and `Concept.related_sources`
-now renders as a real link into `sources/` rather than a bare unlinked string. See `core-types.md`'s "How
-pages link to each other" for the full field-by-field map, including the one remaining gap that's *not* just
-a rendering fix (`related_sources` still isn't required to resolve by the extraction prompt or checked by the
-dangling-links validator the way `related_pages`/`related_concepts` are).
+`contradicted_by` renders under its own `## Contradicted By` heading (kept separate from `## Related Pages`
+since D17 calls this a conflict, not a relation), and `Concept.related_sources` renders as a real link into
+`sources/` rather than a bare unlinked string.
+
+**Every rendered link also carries the target page's own `description`** — `_format_link_line(link,
+description)` appends `— <description>` (flattened via `_plain_text_snippet`, same as `index.md`), or renders
+the bare link with no trailing dash when there's nothing to show (a dangling target, or a page with no
+description yet). The description always comes from a *fresh read of the target page itself*
+(`_claim_description`/`_concept_description`/`_source_page_description`, each doing a `read_claim`/
+`read_concept`/`read_source` by slug and falling back the same way `index.md` entries do —
+`description or claim_text`/`description or summary` for `Claim`/`Concept`, `Source.description` alone since
+it's already deterministic) — never the *referencing* page's own idea of what the target says, so it can't
+drift from the target's actual current frontmatter. This is why `_render_*_body` had to stop being
+`@staticmethod`: rendering one page's body now reads other pages through `self`. Write ordering already
+guarantees every link target that will resolve at all is on disk by the time its description is looked up
+(claim files are written before the backlink-maintenance calls that reference them; `_ensure_source_pages`
+runs before any Phase 2 write) — see "Incremental backlink maintenance" below. `Claim.contradicted_by` is the
+one exception with something extra: `## Contradicted By` shows both the edge's own `reason` (authored by
+*this* page, why the conflict was flagged) and the target Claim's `description` in parentheses (from *its
+own* frontmatter) — `- [slug](path) — reason (description)` — since the two answer different questions and
+neither should be dropped. `Claim.source_ref`/`Source.source_path` are the two exceptions that get no
+description at all: they point *out* of the wiki to a Raw Source, which has no OKF frontmatter to source one
+from. See `core-types.md`'s "How pages link to each other" for the full field-by-field map, including the one
+remaining gap that's *not* just a rendering fix (`related_sources` still isn't required to resolve by the
+extraction prompt or checked by the dangling-links validator the way `related_pages`/`related_concepts` are).
 
 | Type | Body sections (in order) |
 |---|---|

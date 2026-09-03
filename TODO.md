@@ -670,6 +670,47 @@ separate gaps. User overrode that scoping — both now render exactly like every
       `[[slug]]` references outside the new table, in the per-type field docs themselves).
 - [x] Full `mypy --strict`/`ruff check .`/`pytest` sweep: 263 passed (2 new), no lint/type errors.
 
+### B15. Every body/index link carries its target page's own description (2026-09-03) — **implemented and verified**
+
+Direct follow-up to B13/B14: user asked that every link section have a corresponding description, sourced
+from the *linked* page's own frontmatter — not just a bare `[slug](path)` bullet. `index.md` entries already
+did this (`- [slug](slug.md) — description`); body link sections (`## Related Pages`/`## Key Facts`/
+`## Produced Claims`/`## Produced Concepts`/`## Contradicted By`/`## Related Sources`) didn't.
+
+- [x] New `_format_link_line(link, description) -> str` in `adapters/writers/markdown_writer.py`: renders
+      `- <link> — <description>` (description flattened via the existing `_plain_text_snippet`), or the bare
+      `- <link>` when there's nothing to show — same convention `_write_type_index` already used for
+      `index.md`, now shared (`_write_type_index` refactored to call it too, replacing its inline
+      flatten-and-dash logic — no behavior change there, pure dedup).
+- [x] New instance methods `_claim_description`/`_concept_description`/`_source_page_description(slug)`:
+      each does a fresh `read_claim`/`read_concept`/`read_source` **of the link's target**, not the
+      referencing page, so a description can never be authored/guessed by whoever wrote the page pointing at
+      it — it always reflects the target's actual current frontmatter. Same `description or <content>`
+      fallback `index.md` entries already use (`claim.description or claim.claim_text`,
+      `concept.description or concept.summary`); `Source.description` is used alone since it's already
+      deterministic (D23 §5.4, no LLM-authored value to fall back from). Returns `""` for a dangling/missing
+      target — the same graceful-degradation treatment every dangling link already gets elsewhere.
+- [x] **`_render_claim_body`/`_render_concept_body`/`_render_source_body` stopped being `@staticmethod`** —
+      rendering one page's body now reads other pages (through `self`) to fetch their descriptions. Verified
+      safe by tracing write order: a link's target is always on disk by the time its description is looked
+      up (a Claim file is written *before* the backlink-maintenance calls that reference it from a Concept or
+      Source; `_ensure_source_pages` runs before any Phase 2 write) — a target that will never resolve
+      (genuinely dangling) just gets the empty-description fallback above instead, no exception, no ordering
+      hazard either way.
+- [x] `Claim.contradicted_by`'s `## Contradicted By` line keeps **both** pieces of text, since they answer
+      different questions: `reason` (why *this* page flags the conflict — authored on this edge, from
+      `ContradictionRef`) and the target Claim's own `description` in parentheses (from *its* frontmatter,
+      same treatment as every other link) — `- [slug](path) — reason (description)`.
+- [x] `Claim.source_ref`/`Source.source_path` deliberately excluded — both point *out* of the wiki to a Raw
+      Source, which has no OKF frontmatter to source a description from (unchanged from B13/B14's reasoning).
+- [x] Strengthened the B14 tests that a bare substring check would have let silently pass without actually
+      proving the description appears (`test_claim_body_renders_contradicted_by_as_markdown_link_with_description`,
+      `test_concept_body_renders_related_sources_as_markdown_link_with_description`, both renamed +
+      exact-line asserted), added `test_body_link_omits_description_dash_for_dangling_target` (graceful
+      degradation) and updated the two pre-existing related-page/key-facts tests to assert the full
+      `- [slug](path) — description` line, in `tests/integration/test_markdown_writer.py`.
+- [x] Full `mypy --strict`/`ruff check .`/`pytest` sweep: 264 passed (1 net new), no lint/type errors.
+
 ## C. Test coverage gaps (ASSUMPTIONS.md §C)
 
 - [x] Unit tests for **B-3**: `Writer` incremental backlink maintenance (`key_facts` field) — already covered

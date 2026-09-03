@@ -135,20 +135,26 @@ fixed as a `TODO.md`-dated note, not a new D-numbered decision — D17's actual 
 slug-shaped link field gets the same rendering treatment — `_wiki_link` in `markdown_writer.py` — including
 two that initially didn't (`Claim.contradicted_by` had no body section at all; `Concept.related_sources`
 rendered as a bare unlinked string): both fixed in the same follow-up pass once the first fix surfaced the
-inconsistency, see `TODO.md`'s dated entries. This table is the precise picture, cross-checked against
-`markdown_writer.py` itself rather than assumed from field names:
+inconsistency, see `TODO.md`'s dated entries.
+
+**Every rendered link also carries the target page's own `description`**, fetched by a fresh
+`read_claim`/`read_concept`/`read_source` of the *target* (never the referencing page's own guess) —
+`- [slug](path) — <description>`, same `description or <content-fallback>` rule `index.md` entries already
+use, omitted entirely (no trailing dash) when the target has nothing to show yet or doesn't exist. This table
+is the precise picture, cross-checked against `markdown_writer.py` itself rather than assumed from field
+names:
 
 | Field | Type | Points to | Rendered in body? | Notes |
 |---|---|---|---|---|
-| `Claim.related_concepts` | Claim | Concept slug(s) | Yes — `## Related Pages` | LLM output; `DefaultFixer` strips dangling targets |
-| `Claim.contradicted_by` | Claim | Claim slug (inside `{slug, reason}`) | Yes — `## Contradicted By` (`- [slug](path) — reason`), its own heading, not folded into `## Related Pages` | Symmetric backlink maintained by `Writer`; a lint accelerator, not an authoritative relation — `domain/query.py`'s graph expansion still deliberately excludes it, since a conflict isn't a "related page" to navigate toward, even though it's now rendered the same way visually |
-| `Concept.key_facts` | Concept | Claim slug(s) | Yes — `## Key Facts` | Writer-only backlink, never LLM output |
-| `Concept.related_pages` | Concept | Concept slug(s) | Yes — `## Related Pages` | LLM output |
-| `Concept.related_sources` | Concept | Source slug(s) | Yes — `## Related Sources` | LLM output; **not yet held to the same standard everywhere** — see the gap noted below |
-| `Source.produced_claims` | Source | Claim slug(s) | Yes — `## Produced Claims` | Writer-only backlink |
-| `Source.produced_concepts` | Source | Concept slug(s) | Yes — `## Produced Concepts` | Writer-only backlink |
-| `Source.related_pages` | Source | Source slug(s) | Yes — `## Related Pages` (but the section never appears in practice) | No code path populates this field today — schema symmetry only |
-| `claims/`\`concepts/`\`sources/index.md` entries | — | That entry's own page, same directory | Yes — every index line | Always same-directory (`[slug](slug.md)`), since each type's `index.md` lives alongside its own pages |
+| `Claim.related_concepts` | Claim | Concept slug(s) | Yes — `## Related Pages`, `- [slug](path) — <Concept's description or summary>` | LLM output; `DefaultFixer` strips dangling targets |
+| `Claim.contradicted_by` | Claim | Claim slug (inside `{slug, reason}`) | Yes — `## Contradicted By`, `- [slug](path) — <reason> (<Claim's description or claim_text>)`, its own heading, not folded into `## Related Pages` | Symmetric backlink maintained by `Writer`; a lint accelerator, not an authoritative relation — `domain/query.py`'s graph expansion still deliberately excludes it, since a conflict isn't a "related page" to navigate toward, even though it's now rendered the same way visually. The only field with *two* pieces of text: `reason` is this edge's own annotation (why flagged, authored by *this* page); the parenthesized part is the target's own description, exactly like every other link |
+| `Concept.key_facts` | Concept | Claim slug(s) | Yes — `## Key Facts`, `- [slug](path) — <Claim's description or claim_text>` | Writer-only backlink, never LLM output |
+| `Concept.related_pages` | Concept | Concept slug(s) | Yes — `## Related Pages`, `- [slug](path) — <Concept's description or summary>` | LLM output |
+| `Concept.related_sources` | Concept | Source slug(s) | Yes — `## Related Sources`, `- [slug](path) — <Source.description>` | LLM output; **not yet held to the same standard everywhere** — see the gap noted below |
+| `Source.produced_claims` | Source | Claim slug(s) | Yes — `## Produced Claims`, `- [slug](path) — <Claim's description or claim_text>` | Writer-only backlink |
+| `Source.produced_concepts` | Source | Concept slug(s) | Yes — `## Produced Concepts`, `- [slug](path) — <Concept's description or summary>` | Writer-only backlink |
+| `Source.related_pages` | Source | Source slug(s) | Yes — `## Related Pages`, `- [slug](path) — <Source.description>` (but the section never appears in practice) | No code path populates this field today — schema symmetry only |
+| `claims/`\`concepts/`\`sources/index.md` entries | — | That entry's own page, same directory | Yes — every index line, `- [slug](slug.md) — <that page's own description>` | Always same-directory (`[slug](slug.md)`), since each type's `index.md` lives alongside its own pages — same `_format_link_line` helper the body sections now share |
 
 **Remaining gap, deliberately not fixed alongside the rendering (out of scope — this is a prompt/validation
 change, not a notation change): `Concept.related_sources` is rendered exactly like every other link field,

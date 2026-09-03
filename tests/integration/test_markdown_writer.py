@@ -305,6 +305,9 @@ def test_index_entry_flattens_a_multiline_description_regardless_of_source(tmp_p
 
 def test_claim_body_renders_related_pages_and_sources_from_frontmatter(tmp_path: Path) -> None:
     writer = MarkdownWriter(tmp_path)
+    writer.write_concept(
+        Concept(slug="water", concept_title="Water", summary="A long write-up.", description="A common compound.")
+    )
     claim = Claim(
         slug="claim-1",
         claim_text="Water boils at 100C at sea level.",
@@ -318,7 +321,9 @@ def test_claim_body_renders_related_pages_and_sources_from_frontmatter(tmp_path:
 
     body = (tmp_path / "claims" / "claim-1.md").read_text(encoding="utf-8")
     assert "## Related Pages" in body
-    assert "- [water](../concepts/water.md)" in body
+    # Description is the target Concept's own frontmatter description, not this Claim's — sourced by a
+    # fresh read of the target page, so it can never be authored/guessed by whoever wrote *this* page.
+    assert "- [water](../concepts/water.md) — A common compound." in body
     assert "## Related Sources" in body
     assert "- doc-1#p3" in body
     # Not independently LLM-generated: the body's link section is a deterministic rendering of the
@@ -336,6 +341,7 @@ def test_concept_body_renders_key_facts_and_related_pages_from_frontmatter(tmp_p
         Claim(
             slug="claim-1",
             claim_text="Water boils at 100C.",
+            description="Water's boiling point.",
             source_ref="doc-1#p1",
             confidence=0.9,
             provenance_state="extracted",
@@ -345,18 +351,22 @@ def test_concept_body_renders_key_facts_and_related_pages_from_frontmatter(tmp_p
 
     body = (tmp_path / "concepts" / "ice.md").read_text(encoding="utf-8")
     assert "## Key Facts" in body
-    assert "- [claim-1](../claims/claim-1.md)" in body  # key_facts backlink (§2.3.2), rendered deterministically
+    # key_facts backlink (§2.3.2), rendered deterministically, with claim-1's own description.
+    assert "- [claim-1](../claims/claim-1.md) — Water's boiling point." in body
 
 
-def test_claim_body_renders_contradicted_by_as_markdown_link(tmp_path: Path) -> None:
-    """contradicted_by is a link-shaped field too (D17 item 3) — same markdown-link treatment as every other
-    one, just its own heading (not folded into "## Related Pages") since it records a conflict, not a
-    relation (domain/query.py's graph expansion deliberately excludes it for the same reason)."""
+def test_claim_body_renders_contradicted_by_as_markdown_link_with_description(tmp_path: Path) -> None:
+    """contradicted_by is a link-shaped field too (D17 item 3) — same markdown-link + description treatment
+    as every other one, just its own heading (not folded into "## Related Pages") since it records a
+    conflict, not a relation (domain/query.py's graph expansion deliberately excludes it for the same
+    reason). ``reason`` (this edge's own annotation) and the target's ``description`` (from its own
+    frontmatter) are two different things and both show up."""
     writer = MarkdownWriter(tmp_path)
     writer.write_claim(
         Claim(
             slug="claim-a",
             claim_text="The meeting was on Monday.",
+            description="Meeting day, per witness A.",
             source_ref="doc-1#p1",
             confidence=0.6,
             provenance_state="extracted",
@@ -375,12 +385,12 @@ def test_claim_body_renders_contradicted_by_as_markdown_link(tmp_path: Path) -> 
 
     body = (tmp_path / "claims" / "claim-b.md").read_text(encoding="utf-8")
     assert "## Contradicted By" in body
-    assert "- [claim-a](claim-a.md) — conflicting weekday" in body
+    assert "- [claim-a](claim-a.md) — conflicting weekday (Meeting day, per witness A.)" in body
 
 
-def test_concept_body_renders_related_sources_as_markdown_link(tmp_path: Path) -> None:
-    """related_sources points to Source pages — same markdown-link treatment as related_pages/key_facts,
-    not a bare unlinked string."""
+def test_concept_body_renders_related_sources_as_markdown_link_with_description(tmp_path: Path) -> None:
+    """related_sources points to Source pages — same markdown-link + description treatment as
+    related_pages/key_facts, not a bare unlinked string."""
     writer = MarkdownWriter(tmp_path)
     writer.write_source(
         Source(
@@ -395,7 +405,30 @@ def test_concept_body_renders_related_sources_as_markdown_link(tmp_path: Path) -
 
     body = (tmp_path / "concepts" / "water.md").read_text(encoding="utf-8")
     assert "## Related Sources" in body
-    assert "- [doc-1](../sources/doc-1.md)" in body
+    # Source.description is deterministically the flattened summary (D23 §5.4) — no LLM-authored fallback.
+    assert "- [doc-1](../sources/doc-1.md) — A short document." in body
+
+
+def test_body_link_omits_description_dash_for_dangling_target(tmp_path: Path) -> None:
+    """A link pointing at a page that doesn't exist (a dangling target — normally stripped by DefaultFixer
+    before reaching the Writer, but the Writer itself must still degrade gracefully) renders the link alone,
+    with no trailing "— " and nothing after it — same convention as an empty description anywhere else."""
+    writer = MarkdownWriter(tmp_path)
+    writer.write_claim(
+        Claim(
+            slug="claim-1",
+            claim_text="...",
+            source_ref="doc-1#p1",
+            confidence=0.5,
+            provenance_state="extracted",
+            related_concepts=["missing-concept"],
+        )
+    )
+
+    body = (tmp_path / "claims" / "claim-1.md").read_text(encoding="utf-8")
+    lines = body.splitlines()
+    assert "- [missing-concept](../concepts/missing-concept.md)" in lines
+    assert not any(line.startswith("- [missing-concept](../concepts/missing-concept.md) —") for line in lines)
 
 
 def test_body_omits_sections_with_no_content(tmp_path: Path) -> None:

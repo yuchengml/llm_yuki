@@ -78,6 +78,17 @@ def _wiki_link(slug: str, from_dir: str, to_dir: str) -> str:
     return f"[{slug}]({target})"
 
 
+def _format_link_line(link: str, description: str) -> str:
+    """``- <link> — <description>``, with the description flattened (``_plain_text_snippet``) and the
+    ``— description`` suffix dropped entirely when there's nothing to show — a dangling target (the linked
+    page doesn't exist), or a page that legitimately has no description yet (e.g. a fresh ``Source`` with no
+    ``summary`` yet). Same convention every ``index.md`` entry already used; body link sections now share it
+    too, so every rendered link — body or index — carries its target's own frontmatter description.
+    """
+    flattened = _plain_text_snippet(description) if description else ""
+    return f"- {link} — {flattened}" if flattened else f"- {link}"
+
+
 def _plain_text_snippet(text: str, max_chars: int = _DESCRIPTION_SNIPPET_MAX_CHARS) -> str:
     """Flatten a (possibly multi-section) markdown text into one plain-text line for use in a
     ``description`` — strips ``#``/``##`` heading markers (keeping the heading text itself) and collapses all
@@ -244,64 +255,109 @@ class MarkdownWriter(Writer):
         body = self._render_source_body(source)
         self._write_page(self._source_path(source.slug), frontmatter, body)
 
-    @staticmethod
-    def _render_claim_body(claim: Claim) -> str:
+    def _render_claim_body(self, claim: Claim) -> str:
         lines = [f"# {claim.slug}", "", claim.claim_text, "", _SECTIONS_SENTINEL, ""]
         if claim.related_concepts:
             lines.append("## Related Pages")
-            lines.extend(f"- {_wiki_link(slug, _CLAIMS_DIR, _CONCEPTS_DIR)}" for slug in claim.related_concepts)
+            lines.extend(
+                _format_link_line(_wiki_link(slug, _CLAIMS_DIR, _CONCEPTS_DIR), self._concept_description(slug))
+                for slug in claim.related_concepts
+            )
             lines.append("")
         if claim.contradicted_by:
             # A distinct heading, not folded into "## Related Pages" — D17 item 3 calls this a conflict, not
             # a relation (domain/query.py's graph expansion deliberately excludes it for the same reason).
-            # Still a link-shaped field, still rendered as a standard markdown link like every other one.
+            # Still a link-shaped field, still rendered with the same markdown link + description treatment
+            # as every other one — "reason" is this edge's own annotation (why flagged, from *this* page),
+            # the parenthesized part is the target Claim's own description (from *its* frontmatter).
             lines.append("## Contradicted By")
-            lines.extend(
-                f"- {_wiki_link(ref.slug, _CLAIMS_DIR, _CLAIMS_DIR)} — {ref.reason}" for ref in claim.contradicted_by
-            )
+            for ref in claim.contradicted_by:
+                link = _wiki_link(ref.slug, _CLAIMS_DIR, _CLAIMS_DIR)
+                description = _plain_text_snippet(self._claim_description(ref.slug))
+                detail = f"{ref.reason} ({description})" if description else ref.reason
+                lines.append(f"- {link} — {detail}")
             lines.append("")
         if claim.source_ref:
+            # Not a wiki-page link (D17: points *out* of the wiki to a Raw Source, which has no frontmatter
+            # of its own to source a description from) — stays a plain locator, unlike every field above.
             lines.append("## Related Sources")
             lines.append(f"- {claim.source_ref}")
             lines.append("")
         return "\n".join(lines)
 
-    @staticmethod
-    def _render_concept_body(concept: Concept) -> str:
+    def _render_concept_body(self, concept: Concept) -> str:
         lines = [f"# {concept.concept_title}", "", concept.summary, "", _SECTIONS_SENTINEL, ""]
         if concept.key_facts:
             lines.append("## Key Facts")
-            lines.extend(f"- {_wiki_link(slug, _CONCEPTS_DIR, _CLAIMS_DIR)}" for slug in concept.key_facts)
+            lines.extend(
+                _format_link_line(_wiki_link(slug, _CONCEPTS_DIR, _CLAIMS_DIR), self._claim_description(slug))
+                for slug in concept.key_facts
+            )
             lines.append("")
         if concept.related_pages:
             lines.append("## Related Pages")
-            lines.extend(f"- {_wiki_link(slug, _CONCEPTS_DIR, _CONCEPTS_DIR)}" for slug in concept.related_pages)
+            lines.extend(
+                _format_link_line(_wiki_link(slug, _CONCEPTS_DIR, _CONCEPTS_DIR), self._concept_description(slug))
+                for slug in concept.related_pages
+            )
             lines.append("")
         if concept.related_sources:
             lines.append("## Related Sources")
-            lines.extend(f"- {_wiki_link(slug, _CONCEPTS_DIR, _SOURCES_DIR)}" for slug in concept.related_sources)
+            lines.extend(
+                _format_link_line(_wiki_link(slug, _CONCEPTS_DIR, _SOURCES_DIR), self._source_page_description(slug))
+                for slug in concept.related_sources
+            )
             lines.append("")
         return "\n".join(lines)
 
-    @staticmethod
-    def _render_source_body(source: Source) -> str:
+    def _render_source_body(self, source: Source) -> str:
         lines = [f"# {source.source_title}", "", source.summary, "", _SECTIONS_SENTINEL, ""]
         if source.produced_claims:
             lines.append("## Produced Claims")
-            lines.extend(f"- {_wiki_link(slug, _SOURCES_DIR, _CLAIMS_DIR)}" for slug in source.produced_claims)
+            lines.extend(
+                _format_link_line(_wiki_link(slug, _SOURCES_DIR, _CLAIMS_DIR), self._claim_description(slug))
+                for slug in source.produced_claims
+            )
             lines.append("")
         if source.produced_concepts:
             lines.append("## Produced Concepts")
-            lines.extend(f"- {_wiki_link(slug, _SOURCES_DIR, _CONCEPTS_DIR)}" for slug in source.produced_concepts)
+            lines.extend(
+                _format_link_line(_wiki_link(slug, _SOURCES_DIR, _CONCEPTS_DIR), self._concept_description(slug))
+                for slug in source.produced_concepts
+            )
             lines.append("")
         if source.related_pages:
             lines.append("## Related Pages")
-            lines.extend(f"- {_wiki_link(slug, _SOURCES_DIR, _SOURCES_DIR)}" for slug in source.related_pages)
+            lines.extend(
+                _format_link_line(_wiki_link(slug, _SOURCES_DIR, _SOURCES_DIR), self._source_page_description(slug))
+                for slug in source.related_pages
+            )
             lines.append("")
+        # Not a wiki-page link, same reason as Claim.source_ref above — always rendered, unconditionally.
         lines.append("## Source")
         lines.append(f"- {source.source_path}")
         lines.append("")
         return "\n".join(lines)
+
+    # -- Internals: link-target descriptions, sourced from the target page's own frontmatter -------------
+
+    def _claim_description(self, slug: str) -> str:
+        claim = self.read_claim(slug)
+        if claim is None:
+            return ""  # dangling target — not this Writer's job to fix, same treatment as elsewhere
+        return claim.description or claim.claim_text
+
+    def _concept_description(self, slug: str) -> str:
+        concept = self.read_concept(slug)
+        if concept is None:
+            return ""
+        return concept.description or concept.summary
+
+    def _source_page_description(self, slug: str) -> str:
+        source = self.read_source(slug)
+        if source is None:
+            return ""
+        return source.description  # already deterministic/flattened (D23 §5.4) — no further fallback needed
 
     @staticmethod
     def _write_page(path: Path, frontmatter: dict[str, object], body: str) -> None:
@@ -395,14 +451,12 @@ class MarkdownWriter(Writer):
         return entries
 
     def _write_type_index(self, dir_name: str, label: str, entries: list[tuple[str, str]]) -> None:
-        # _plain_text_snippet guards every entry here, not just the deterministic Source fallback — an
+        # _format_link_line guards every entry here, not just the deterministic Source fallback — an
         # index.md line must stay one line no matter what produced the description (LLM output that ignores
         # the "one sentence" instruction, or a fallback built from a now-possibly-multi-section summary).
         lines = [f"# {label} Index", ""]
         for slug, description in entries:
-            flattened = _plain_text_snippet(description)
-            link = _wiki_link(slug, dir_name, dir_name)
-            lines.append(f"- {link} — {flattened}" if flattened else f"- {link}")
+            lines.append(_format_link_line(_wiki_link(slug, dir_name, dir_name), description))
         lines.append("")
         (self._root / dir_name / "index.md").write_text("\n".join(lines), encoding="utf-8")
 
