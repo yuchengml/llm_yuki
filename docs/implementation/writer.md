@@ -97,12 +97,13 @@ internal implementation detail no prompt ever mentions to the LLM.
 
 Every `write_*` call renders the body from that same call's in-memory model fields, via a static
 `_render_*_body` method — `## Related Pages` / `## Related Sources` / `## Key Facts` / `## Produced Claims` /
-`## Produced Concepts` sections all come from this, never independently asked of an LLM. This is what keeps
-body and frontmatter from ever drifting apart, and avoids an entire class of consistency-check that would
-otherwise be needed (D17). A section is omitted entirely (not rendered as an empty heading) when its source
-list is empty — e.g. a `Claim` with no `related_concepts` gets no `## Related Pages` heading at all. The
-content field (`claim_text`/`summary`) is always the first thing rendered, right after the title — it's the
-*only* place that field is written to disk at all, see "Page file format" above.
+`## Produced Concepts` / `## Contradicted By` sections all come from this, never independently asked of an
+LLM. This is what keeps body and frontmatter from ever drifting apart, and avoids an entire class of
+consistency-check that would otherwise be needed (D17). A section is omitted entirely (not rendered as an
+empty heading) when its source list is empty — e.g. a `Claim` with no `related_concepts` gets no
+`## Related Pages` heading at all. The content field (`claim_text`/`summary`) is always the first thing
+rendered, right after the title — it's the *only* place that field is written to disk at all, see "Page file
+format" above.
 
 Every one of those cross-page links — plus every `index.md` entry (see below) — is rendered by the
 module-level `_wiki_link(slug, from_dir, to_dir)` helper as a **standard markdown link**,
@@ -112,13 +113,18 @@ fixed as a `TODO.md`-dated note, see there for the full before/after). `_CLAIMS_
 `_SOURCES_DIR` are flat sibling directories directly under the bundle root, so the relative path is always
 either same-directory (`<slug>.md`, e.g. a `Concept`'s `related_pages` linking to another `Concept`) or one
 level over (`../<other_dir>/<slug>.md`, e.g. a `Source`'s `produced_claims` linking into `claims/`) — never
-any deeper nesting. See `core-types.md`'s "How pages link to each other" for the full field-by-field map of
-which fields actually get this treatment (not every slug-shaped field does — `Claim.contradicted_by` has no
-body section at all, and `Concept.related_sources` renders as a bare unlinked string, not a markdown link).
+any deeper nesting. Every slug-shaped link field now gets this same treatment, including two that initially
+didn't (found and fixed as a direct follow-up, once the first pass surfaced the inconsistency): a `Claim`'s
+`contradicted_by` renders under its own `## Contradicted By` heading (`- [slug](path) — reason`, kept
+separate from `## Related Pages` since D17 calls this a conflict, not a relation), and `Concept.related_sources`
+now renders as a real link into `sources/` rather than a bare unlinked string. See `core-types.md`'s "How
+pages link to each other" for the full field-by-field map, including the one remaining gap that's *not* just
+a rendering fix (`related_sources` still isn't required to resolve by the extraction prompt or checked by the
+dangling-links validator the way `related_pages`/`related_concepts` are).
 
 | Type | Body sections (in order) |
 |---|---|
-| `Claim` | title, `claim_text`, `_SECTIONS_SENTINEL`, `## Related Pages` (from `related_concepts`, if any), `## Related Sources` (from `source_ref`, if non-empty) |
+| `Claim` | title, `claim_text`, `_SECTIONS_SENTINEL`, `## Related Pages` (from `related_concepts`, if any), `## Contradicted By` (from `contradicted_by`, if any), `## Related Sources` (from `source_ref`, if non-empty) |
 | `Concept` | title, `summary`, `_SECTIONS_SENTINEL`, `## Key Facts` (from `key_facts`), `## Related Pages` (from `related_pages`), `## Related Sources` (from `related_sources`) |
 | `Source` | title, `summary`, `_SECTIONS_SENTINEL`, `## Produced Claims`, `## Produced Concepts`, `## Related Pages`, `## Source` (always rendered — `source_path`) |
 

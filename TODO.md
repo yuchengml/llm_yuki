@@ -633,6 +633,43 @@ claimed to follow, same pattern as B5–B12 above.
       neither needed a change beyond the notation fix itself.
 - [x] Full `mypy --strict`/`ruff check .`/`pytest` sweep: 261 passed, no lint/type errors.
 
+### B14. Extend B13's fix to the two fields it deliberately left out: "any link gets the same treatment" (2026-09-03) — **implemented and verified**
+
+Direct user follow-up to B13: "只要是連結應該都是相同待遇" (as long as it's a link, it should get the same
+treatment). B13 fixed the `[[slug]]` → markdown-link notation but explicitly left `Claim.contradicted_by`
+(no body section at all) and `Concept.related_sources` (bare unlinked string) unchanged, flagging them as
+separate gaps. User overrode that scoping — both now render exactly like every other slug-bearing link field.
+
+- [x] `adapters/writers/markdown_writer.py::_render_claim_body`: new `## Contradicted By` section (only when
+      `claim.contradicted_by` is non-empty), rendered as `- {_wiki_link(ref.slug, _CLAIMS_DIR, _CLAIMS_DIR)}
+      — {ref.reason}` — a real markdown link plus the conflict reason, one bullet per entry. Deliberately its
+      own heading, not folded into `## Related Pages`: D17 item 3 already calls `contradicted_by` a conflict,
+      not a relation, and `domain/query.py`'s graph-expansion docstring makes the same distinction on purpose
+      ("that records a conflict, not a 'related page' a query should navigate toward") — same link notation,
+      still a visually distinct section, so that reasoning stays intact.
+- [x] `adapters/writers/markdown_writer.py::_render_concept_body`: `related_sources` now renders via
+      `_wiki_link(slug, _CONCEPTS_DIR, _SOURCES_DIR)` instead of the bare `f"- {src}"` — treated as pointing
+      to `Source` page slugs, matching how `domain/query.py`'s graph expansion already walked it (and the
+      most natural reading of the field name itself, given no better-established alternative). `entities.py`'s
+      `Concept.related_sources` docstring updated to match: `"Wikilinks to related Source pages."`
+      (was the vaguer "Source/provenance digest links.").
+- [x] **What this does *not* fix — the pipeline-consistency gap noted in B13 is still open, on purpose**:
+      `related_sources` is now *rendered* like `related_pages`/`related_concepts`, but isn't yet *produced* or
+      *validated* like one — the `CompileWikiPages` prompt still doesn't require its values to resolve to a
+      real slug, `DefaultValidator._check_dangling_links` still doesn't check it, and `Source` pages still
+      don't get a real `LLMExtractor._describe_page` case (see `pipeline-overview.md`'s "Why Source creation
+      waits"). Fixing that touches the extraction prompt and validator — real LLM-behavior and cost
+      implications, not a rendering change — so it's deliberately out of scope here and stays tracked as open
+      work in `docs/implementation/core-types.md`'s "How pages link to each other", not silently folded in.
+- [x] New tests in `tests/integration/test_markdown_writer.py`:
+      `test_claim_body_renders_contradicted_by_as_markdown_link` (asserts the new heading + link + reason),
+      `test_concept_body_renders_related_sources_as_markdown_link` (asserts the `sources/`-relative link).
+- [x] `docs/implementation/core-types.md`/`writer.md` updated: the "How pages link to each other" table's
+      `contradicted_by`/`related_sources` rows, the per-type field tables, and the `Claim`/`Concept.description`
+      "index entry's own markdown-link text" mentions I'd missed in the B13 pass (`core-types.md` had two more
+      `[[slug]]` references outside the new table, in the per-type field docs themselves).
+- [x] Full `mypy --strict`/`ruff check .`/`pytest` sweep: 263 passed (2 new), no lint/type errors.
+
 ## C. Test coverage gaps (ASSUMPTIONS.md §C)
 
 - [x] Unit tests for **B-3**: `Writer` incremental backlink maintenance (`key_facts` field) — already covered

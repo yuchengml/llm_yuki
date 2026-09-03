@@ -251,6 +251,15 @@ class MarkdownWriter(Writer):
             lines.append("## Related Pages")
             lines.extend(f"- {_wiki_link(slug, _CLAIMS_DIR, _CONCEPTS_DIR)}" for slug in claim.related_concepts)
             lines.append("")
+        if claim.contradicted_by:
+            # A distinct heading, not folded into "## Related Pages" — D17 item 3 calls this a conflict, not
+            # a relation (domain/query.py's graph expansion deliberately excludes it for the same reason).
+            # Still a link-shaped field, still rendered as a standard markdown link like every other one.
+            lines.append("## Contradicted By")
+            lines.extend(
+                f"- {_wiki_link(ref.slug, _CLAIMS_DIR, _CLAIMS_DIR)} — {ref.reason}" for ref in claim.contradicted_by
+            )
+            lines.append("")
         if claim.source_ref:
             lines.append("## Related Sources")
             lines.append(f"- {claim.source_ref}")
@@ -270,7 +279,7 @@ class MarkdownWriter(Writer):
             lines.append("")
         if concept.related_sources:
             lines.append("## Related Sources")
-            lines.extend(f"- {src}" for src in concept.related_sources)
+            lines.extend(f"- {_wiki_link(slug, _CONCEPTS_DIR, _SOURCES_DIR)}" for slug in concept.related_sources)
             lines.append("")
         return "\n".join(lines)
 

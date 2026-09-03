@@ -348,6 +348,56 @@ def test_concept_body_renders_key_facts_and_related_pages_from_frontmatter(tmp_p
     assert "- [claim-1](../claims/claim-1.md)" in body  # key_facts backlink (§2.3.2), rendered deterministically
 
 
+def test_claim_body_renders_contradicted_by_as_markdown_link(tmp_path: Path) -> None:
+    """contradicted_by is a link-shaped field too (D17 item 3) — same markdown-link treatment as every other
+    one, just its own heading (not folded into "## Related Pages") since it records a conflict, not a
+    relation (domain/query.py's graph expansion deliberately excludes it for the same reason)."""
+    writer = MarkdownWriter(tmp_path)
+    writer.write_claim(
+        Claim(
+            slug="claim-a",
+            claim_text="The meeting was on Monday.",
+            source_ref="doc-1#p1",
+            confidence=0.6,
+            provenance_state="extracted",
+        )
+    )
+    writer.write_claim(
+        Claim(
+            slug="claim-b",
+            claim_text="The meeting was on Tuesday.",
+            source_ref="doc-2#p4",
+            confidence=0.6,
+            provenance_state="extracted",
+            contradicted_by=[ContradictionRef(slug="claim-a", reason="conflicting weekday")],
+        )
+    )
+
+    body = (tmp_path / "claims" / "claim-b.md").read_text(encoding="utf-8")
+    assert "## Contradicted By" in body
+    assert "- [claim-a](claim-a.md) — conflicting weekday" in body
+
+
+def test_concept_body_renders_related_sources_as_markdown_link(tmp_path: Path) -> None:
+    """related_sources points to Source pages — same markdown-link treatment as related_pages/key_facts,
+    not a bare unlinked string."""
+    writer = MarkdownWriter(tmp_path)
+    writer.write_source(
+        Source(
+            slug="doc-1",
+            source_title="Doc 1",
+            source_path="raw_sources/doc-1",
+            ingested_at="2026-08-27",
+            summary="A short document.",
+        )
+    )
+    writer.write_concept(Concept(slug="water", concept_title="Water", summary="A compound.", related_sources=["doc-1"]))
+
+    body = (tmp_path / "concepts" / "water.md").read_text(encoding="utf-8")
+    assert "## Related Sources" in body
+    assert "- [doc-1](../sources/doc-1.md)" in body
+
+
 def test_body_omits_sections_with_no_content(tmp_path: Path) -> None:
     writer = MarkdownWriter(tmp_path)
     writer.write_concept(Concept(slug="water", concept_title="Water", summary="A compound."))

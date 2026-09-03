@@ -69,7 +69,7 @@ class Concept(BaseModel):
         description="Slugs of related Claims — a backlink maintained incrementally by the Writer, not the LLM.",
     )
     related_pages: list[str] = Field(default_factory=list, description="Wikilinks to other Concept pages.")
-    related_sources: list[str] = Field(default_factory=list, description="Source/provenance digest links.")
+    related_sources: list[str] = Field(default_factory=list, description="Wikilinks to related Source pages.")
 
 
 class Source(BaseModel):
