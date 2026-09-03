@@ -94,7 +94,7 @@ class Source(BaseModel):
         "the Writer from summary on every write, never LLM output (same 'deterministic overrides LLM' "
         "treatment as source_ref anchoring, D17/D18/D22); any value passed in is overwritten. Plain "
         "discourse, like Claim/Concept.description — never a 'source_title: ...' composite; source_title is "
-        "already the index entry's own [[slug]] link text.",
+        "already the index entry's own markdown-link text.",
     )
     produced_claims: list[str] = Field(
         default_factory=list,

@@ -64,6 +64,20 @@ sections that batch. An HTML comment: invisible when the markdown is rendered by
 _DESCRIPTION_SNIPPET_MAX_CHARS = 160
 
 
+def _wiki_link(slug: str, from_dir: str, to_dir: str) -> str:
+    """A standard markdown link (D17: "頁面間 wikilink ... 標準 markdown link") to another page in this bundle.
+
+    D17 already decided body/index cross-references are *standard* markdown links, not a bespoke wiki-style
+    ``[[slug]]`` notation — this had drifted from that decision in the original implementation (see
+    ``TODO.md``'s dated note). ``from_dir``/``to_dir`` are one of ``_CLAIMS_DIR``/``_CONCEPTS_DIR``/
+    ``_SOURCES_DIR``; all three are flat sibling directories directly under the bundle root, so the only two
+    possible relative shapes are "same directory" (``<slug>.md``) and "one directory over"
+    (``../<to_dir>/<slug>.md``) — no deeper nesting exists to account for.
+    """
+    target = f"{slug}.md" if from_dir == to_dir else f"../{to_dir}/{slug}.md"
+    return f"[{slug}]({target})"
+
+
 def _plain_text_snippet(text: str, max_chars: int = _DESCRIPTION_SNIPPET_MAX_CHARS) -> str:
     """Flatten a (possibly multi-section) markdown text into one plain-text line for use in a
     ``description`` — strips ``#``/``##`` heading markers (keeping the heading text itself) and collapses all
@@ -83,7 +97,7 @@ def _source_description(source: Source) -> str:
 
     Just the flattened prose, not ``f"{title}: ..."`` — a ``description``, for any of the three core types,
     is one paragraph of discourse, never a ``"<name>: <description>"`` composite (the title is already the
-    index entry's own ``[[slug]]`` link text, so repeating it in the description would be redundant).
+    index entry's own markdown-link text, so repeating it in the description would be redundant).
     ``summary`` may now be a multi-section write-up (not capped to one paragraph) — flattened via
     ``_plain_text_snippet`` so ``description`` stays what its name promises: one line, for ``index.md``.
     Empty (not the title) while ``summary`` is still empty — there's no discourse to summarize yet.
@@ -235,7 +249,7 @@ class MarkdownWriter(Writer):
         lines = [f"# {claim.slug}", "", claim.claim_text, "", _SECTIONS_SENTINEL, ""]
         if claim.related_concepts:
             lines.append("## Related Pages")
-            lines.extend(f"- [[{slug}]]" for slug in claim.related_concepts)
+            lines.extend(f"- {_wiki_link(slug, _CLAIMS_DIR, _CONCEPTS_DIR)}" for slug in claim.related_concepts)
             lines.append("")
         if claim.source_ref:
             lines.append("## Related Sources")
@@ -248,11 +262,11 @@ class MarkdownWriter(Writer):
         lines = [f"# {concept.concept_title}", "", concept.summary, "", _SECTIONS_SENTINEL, ""]
         if concept.key_facts:
             lines.append("## Key Facts")
-            lines.extend(f"- [[{slug}]]" for slug in concept.key_facts)
+            lines.extend(f"- {_wiki_link(slug, _CONCEPTS_DIR, _CLAIMS_DIR)}" for slug in concept.key_facts)
             lines.append("")
         if concept.related_pages:
             lines.append("## Related Pages")
-            lines.extend(f"- [[{slug}]]" for slug in concept.related_pages)
+            lines.extend(f"- {_wiki_link(slug, _CONCEPTS_DIR, _CONCEPTS_DIR)}" for slug in concept.related_pages)
             lines.append("")
         if concept.related_sources:
             lines.append("## Related Sources")
@@ -265,15 +279,15 @@ class MarkdownWriter(Writer):
         lines = [f"# {source.source_title}", "", source.summary, "", _SECTIONS_SENTINEL, ""]
         if source.produced_claims:
             lines.append("## Produced Claims")
-            lines.extend(f"- [[{slug}]]" for slug in source.produced_claims)
+            lines.extend(f"- {_wiki_link(slug, _SOURCES_DIR, _CLAIMS_DIR)}" for slug in source.produced_claims)
             lines.append("")
         if source.produced_concepts:
             lines.append("## Produced Concepts")
-            lines.extend(f"- [[{slug}]]" for slug in source.produced_concepts)
+            lines.extend(f"- {_wiki_link(slug, _SOURCES_DIR, _CONCEPTS_DIR)}" for slug in source.produced_concepts)
             lines.append("")
         if source.related_pages:
             lines.append("## Related Pages")
-            lines.extend(f"- [[{slug}]]" for slug in source.related_pages)
+            lines.extend(f"- {_wiki_link(slug, _SOURCES_DIR, _SOURCES_DIR)}" for slug in source.related_pages)
             lines.append("")
         lines.append("## Source")
         lines.append(f"- {source.source_path}")
@@ -378,7 +392,8 @@ class MarkdownWriter(Writer):
         lines = [f"# {label} Index", ""]
         for slug, description in entries:
             flattened = _plain_text_snippet(description)
-            lines.append(f"- [[{slug}]] — {flattened}" if flattened else f"- [[{slug}]]")
+            link = _wiki_link(slug, dir_name, dir_name)
+            lines.append(f"- {link} — {flattened}" if flattened else f"- {link}")
         lines.append("")
         (self._root / dir_name / "index.md").write_text("\n".join(lines), encoding="utf-8")
 

@@ -121,7 +121,37 @@ naming once instead of per-field:
   `Claim.source_ref`. This follows from `Source.summary` itself already being deterministic (D21 §1.5,
   `Merger.summarize_source`, never direct LLM output) — there is no LLM-authored value to preserve.
 - **`description` is always plain discourse, never a `"<name>: ..."` composite.** True for all three types —
-  the page's title/slug is already the index entry's own `[[slug]]` link text, so repeating it inside
+  the page's title/slug is already the index entry's own markdown-link text, so repeating it inside
   `description` would be redundant. `_source_description` doesn't prepend `source_title`; the `Concept`
   index-entry fallback doesn't prepend `concept_title` either. Extends beyond D23's literal text, see
   `TODO.md`'s dated entry.
+
+## How pages link to each other
+
+All three types name link targets by **`slug` only** — never by title, path, or any other identifier — and
+D17 already decided body/index cross-references render as *standard* markdown links (`[slug](path.md)`), not
+a bespoke `[[slug]]` wiki-style notation (the original implementation had drifted from that decision text;
+fixed as a `TODO.md`-dated note, not a new D-numbered decision — D17's actual text is unchanged). Not every
+slug-shaped field is rendered in the body, though, and not every field that *looks* like the others actually
+behaves the same way — this table is the precise picture, cross-checked against `markdown_writer.py` itself
+rather than assumed from field names:
+
+| Field | Type | Points to | Rendered in body? | Notes |
+|---|---|---|---|---|
+| `Claim.related_concepts` | Claim | Concept slug(s) | Yes — `## Related Pages` | LLM output; `DefaultFixer` strips dangling targets |
+| `Claim.contradicted_by` | Claim | Claim slug (inside `{slug, reason}`) | **No** — frontmatter only, no body section renders it | Symmetric backlink maintained by `Writer`; a lint accelerator, not an authoritative relation |
+| `Concept.key_facts` | Concept | Claim slug(s) | Yes — `## Key Facts` | Writer-only backlink, never LLM output |
+| `Concept.related_pages` | Concept | Concept slug(s) | Yes — `## Related Pages` | LLM output |
+| `Concept.related_sources` | Concept | **Ambiguous** — described as "Source/provenance digest links" (`entities.py`), but the `CompileWikiPages` prompt (`extractor.py`) does *not* require these to be resolvable slugs the way `related_pages` must be | Rendered as a bare, unlinked string (`- {src}`), not wrapped in a markdown link at all — the one array-of-strings field that isn't treated as a same-shape wiki link | `domain/query.py`'s graph expansion nonetheless walks it exactly like the other backlink fields — a pre-existing gap between what this field is documented to hold and how it's actually consumed, out of scope for the link-notation fix and unresolved; see `TODO.md` |
+| `Source.produced_claims` | Source | Claim slug(s) | Yes — `## Produced Claims` | Writer-only backlink |
+| `Source.produced_concepts` | Source | Concept slug(s) | Yes — `## Produced Concepts` | Writer-only backlink |
+| `Source.related_pages` | Source | Source slug(s) | Yes — `## Related Pages` (but the section never appears in practice) | No code path populates this field today — schema symmetry only |
+| `claims/`\`concepts/`\`sources/index.md` entries | — | That entry's own page, same directory | Yes — every index line | Always same-directory (`[slug](slug.md)`), since each type's `index.md` lives alongside its own pages |
+
+Two fields are **not** in-wiki links at all, despite superficially looking like the others — both point *out*
+of the wiki to the original Raw Source, never to another wiki page, and are rendered as plain (unlinked)
+locator text, not a markdown link:
+
+- `Claim.source_ref` — `<source_slug>#p<passage_index>`, anchored by `Orchestrator._anchor_source_refs`
+  (D17/D18/D22 "deterministic overrides LLM"). Rendered under `## Related Sources` in a Claim's body as-is.
+- `Source.source_path` — the Raw Source folder location. Rendered under `## Source` in a Source's body as-is.

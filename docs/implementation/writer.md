@@ -64,7 +64,7 @@ Water boils at 100C at sea level.
 <!-- llm-yuki:sections -->
 
 ## Related Pages
-- [[water]]
+- [water](../concepts/water.md)
 
 ## Related Sources
 - doc-1#p0
@@ -103,6 +103,18 @@ otherwise be needed (D17). A section is omitted entirely (not rendered as an emp
 list is empty — e.g. a `Claim` with no `related_concepts` gets no `## Related Pages` heading at all. The
 content field (`claim_text`/`summary`) is always the first thing rendered, right after the title — it's the
 *only* place that field is written to disk at all, see "Page file format" above.
+
+Every one of those cross-page links — plus every `index.md` entry (see below) — is rendered by the
+module-level `_wiki_link(slug, from_dir, to_dir)` helper as a **standard markdown link**,
+`[slug](relative/path.md)`, never the `[[slug]]` double-bracket wiki-style notation an earlier version of
+this module used (a real deviation from D17's own decision text, which already said "標準 markdown link" —
+fixed as a `TODO.md`-dated note, see there for the full before/after). `_CLAIMS_DIR`/`_CONCEPTS_DIR`/
+`_SOURCES_DIR` are flat sibling directories directly under the bundle root, so the relative path is always
+either same-directory (`<slug>.md`, e.g. a `Concept`'s `related_pages` linking to another `Concept`) or one
+level over (`../<other_dir>/<slug>.md`, e.g. a `Source`'s `produced_claims` linking into `claims/`) — never
+any deeper nesting. See `core-types.md`'s "How pages link to each other" for the full field-by-field map of
+which fields actually get this treatment (not every slug-shaped field does — `Claim.contradicted_by` has no
+body section at all, and `Concept.related_sources` renders as a bare unlinked string, not a markdown link).
 
 | Type | Body sections (in order) |
 |---|---|
@@ -204,21 +216,21 @@ it's the same field already persisted on the page:
 — so a page written before this field existed still gets a usable index entry, it just isn't the
 LLM-authored one-liner. **Neither the origin nor any fallback ever prepends the page's title/slug** —
 `description` is plain discourse for all three types, never a `"<name>: <text>"` composite; the title is
-already the index entry's own `[[slug]]` link text, so repeating it would be redundant (this is why the
+already the index entry's own markdown-link text, so repeating it would be redundant (this is why the
 `Concept` fallback dropped its earlier `f"{concept_title}: {summary}"` form).
 
 **Every entry is flattened through `_plain_text_snippet` in `_write_type_index` before being written** — this
 is the actual bug fix that makes any of the above safe now that `summary` can span multiple `## `
-subsections: naively embedding a multi-line `description`/fallback into `f"- [[{slug}]] — {description}"`
-would break `index.md`'s one-bullet-per-page format (this was caught by a real CLI smoke run against a
-`Source.summary` with subsections, before this flattening step existed — the then-title-prefixed
-`_source_description` produced a `description` containing raw newlines). `_plain_text_snippet` strips
-`#`/`## ` heading markers (keeping the heading text), collapses all whitespace/newlines to single spaces, and
-truncates with `…` past 160 characters. It applies uniformly — to the deterministic `Source` fallback, the
-`Concept` `summary` fallback, and even a syntactically-valid but instruction-ignoring LLM `description` that
-happens to contain a newline — so `index.md` stays well-formed no matter what produced the text. When the
-flattened result is empty (a fresh `Source` with no `summary` yet), the entry is written as bare `[[slug]]`
-with no trailing `— ` at all, rather than a dangling dash.
+subsections: naively embedding a multi-line `description`/fallback into the index line would break
+`index.md`'s one-bullet-per-page format (this was caught by a real CLI smoke run against a `Source.summary`
+with subsections, before this flattening step existed — the then-title-prefixed `_source_description`
+produced a `description` containing raw newlines). `_plain_text_snippet` strips `#`/`## ` heading markers
+(keeping the heading text), collapses all whitespace/newlines to single spaces, and truncates with `…` past
+160 characters. It applies uniformly — to the deterministic `Source` fallback, the `Concept` `summary`
+fallback, and even a syntactically-valid but instruction-ignoring LLM `description` that happens to contain a
+newline — so `index.md` stays well-formed no matter what produced the text. When the flattened result is
+empty (a fresh `Source` with no `summary` yet), the entry is written as a bare `[slug](slug.md)` link with no
+trailing `— ` at all, rather than a dangling dash.
 
 The root `index.md` is a fixed three-block template — `# Claims` / `# Concepts` / `# Sources`, each linking
 to that subdirectory's `index.md` — it never lists individual pages itself, matching OKF's progressive

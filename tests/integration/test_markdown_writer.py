@@ -161,9 +161,9 @@ def test_index_lists_all_pages(tmp_path: Path) -> None:
     assert "concepts/index.md" in root_index
     assert "sources/index.md" in root_index
 
-    assert "[[water]]" in (tmp_path / "concepts" / "index.md").read_text(encoding="utf-8")
-    assert "[[claim-1]]" in (tmp_path / "claims" / "index.md").read_text(encoding="utf-8")
-    assert "[[doc-1]]" in (tmp_path / "sources" / "index.md").read_text(encoding="utf-8")
+    assert "[water](water.md)" in (tmp_path / "concepts" / "index.md").read_text(encoding="utf-8")
+    assert "[claim-1](claim-1.md)" in (tmp_path / "claims" / "index.md").read_text(encoding="utf-8")
+    assert "[doc-1](doc-1.md)" in (tmp_path / "sources" / "index.md").read_text(encoding="utf-8")
 
 
 def test_index_entries_use_description_field_when_set(tmp_path: Path) -> None:
@@ -188,10 +188,12 @@ def test_index_entries_use_description_field_when_set(tmp_path: Path) -> None:
         )
     )
 
-    assert "[[water]] — A common chemical compound." in (tmp_path / "concepts" / "index.md").read_text(encoding="utf-8")
-    assert "[[claim-1]] — Water's boiling point at sea level." in (tmp_path / "claims" / "index.md").read_text(
+    assert "[water](water.md) — A common chemical compound." in (tmp_path / "concepts" / "index.md").read_text(
         encoding="utf-8"
     )
+    assert "[claim-1](claim-1.md) — Water's boiling point at sea level." in (
+        tmp_path / "claims" / "index.md"
+    ).read_text(encoding="utf-8")
 
 
 def test_index_entries_fall_back_when_description_missing(tmp_path: Path) -> None:
@@ -209,14 +211,18 @@ def test_index_entries_fall_back_when_description_missing(tmp_path: Path) -> Non
     )
 
     # falls back to summary alone — no "concept_title: ..." composite (description is plain discourse).
-    assert "[[water]] — A chemical compound." in (tmp_path / "concepts" / "index.md").read_text(encoding="utf-8")
-    assert "[[claim-1]] — Water boils at 100C." in (tmp_path / "claims" / "index.md").read_text(encoding="utf-8")
+    assert "[water](water.md) — A chemical compound." in (tmp_path / "concepts" / "index.md").read_text(
+        encoding="utf-8"
+    )
+    assert "[claim-1](claim-1.md) — Water boils at 100C." in (tmp_path / "claims" / "index.md").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_source_description_is_deterministic_not_llm_input(tmp_path: Path) -> None:
     """Source.description (D23 §5.4) is always Writer-generated from summary — any value passed in is
     overwritten, unlike Claim/Concept.description which is LLM output. Plain discourse, never a
-    "source_title: ..." composite — the title is already the index entry's own [[slug]] link text."""
+    "source_title: ..." composite — the title is already the index entry's own markdown-link text."""
     writer = MarkdownWriter(tmp_path)
     writer.write_source(
         Source(
@@ -248,8 +254,8 @@ def test_index_entry_omits_dash_when_description_empty(tmp_path: Path) -> None:
     )
 
     index_lines = (tmp_path / "sources" / "index.md").read_text(encoding="utf-8").splitlines()
-    assert "- [[doc-1]]" in index_lines
-    assert not any(line.startswith("- [[doc-1]] —") for line in index_lines)
+    assert "- [doc-1](doc-1.md)" in index_lines
+    assert not any(line.startswith("- [doc-1](doc-1.md) —") for line in index_lines)
 
 
 def test_source_description_flattens_multi_section_summary(tmp_path: Path) -> None:
@@ -274,7 +280,10 @@ def test_source_description_flattens_multi_section_summary(tmp_path: Path) -> No
     assert source.description == "Overview This document describes the Eiffel Tower. Details Completed in 1889."
 
     index_lines = (tmp_path / "sources" / "index.md").read_text(encoding="utf-8").splitlines()
-    assert "- [[doc-1]] — Overview This document describes the Eiffel Tower. Details Completed in 1889." in index_lines
+    assert (
+        "- [doc-1](doc-1.md) — Overview This document describes the Eiffel Tower. Details Completed in 1889."
+        in index_lines
+    )
 
 
 def test_index_entry_flattens_a_multiline_description_regardless_of_source(tmp_path: Path) -> None:
@@ -291,7 +300,7 @@ def test_index_entry_flattens_a_multiline_description_regardless_of_source(tmp_p
     )
 
     index_lines = (tmp_path / "concepts" / "index.md").read_text(encoding="utf-8").splitlines()
-    assert "- [[water]] — Line one. Line two, which should not have been here." in index_lines
+    assert "- [water](water.md) — Line one. Line two, which should not have been here." in index_lines
 
 
 def test_claim_body_renders_related_pages_and_sources_from_frontmatter(tmp_path: Path) -> None:
@@ -309,7 +318,7 @@ def test_claim_body_renders_related_pages_and_sources_from_frontmatter(tmp_path:
 
     body = (tmp_path / "claims" / "claim-1.md").read_text(encoding="utf-8")
     assert "## Related Pages" in body
-    assert "- [[water]]" in body
+    assert "- [water](../concepts/water.md)" in body
     assert "## Related Sources" in body
     assert "- doc-1#p3" in body
     # Not independently LLM-generated: the body's link section is a deterministic rendering of the
@@ -336,7 +345,7 @@ def test_concept_body_renders_key_facts_and_related_pages_from_frontmatter(tmp_p
 
     body = (tmp_path / "concepts" / "ice.md").read_text(encoding="utf-8")
     assert "## Key Facts" in body
-    assert "- [[claim-1]]" in body  # key_facts backlink (§2.3.2), rendered the same deterministic way
+    assert "- [claim-1](../claims/claim-1.md)" in body  # key_facts backlink (§2.3.2), rendered deterministically
 
 
 def test_body_omits_sections_with_no_content(tmp_path: Path) -> None:

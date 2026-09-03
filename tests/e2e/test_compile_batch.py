@@ -123,7 +123,7 @@ def test_full_pipeline_compiles_one_batch_and_maintains_backlinks(tmp_path: Path
 
     body = (bundle_dir / "claims" / "water-boils.md").read_text(encoding="utf-8")
     assert "## Related Pages" in body
-    assert "- [[water]]" in body
+    assert "- [water](../concepts/water.md)" in body
 
     source = writer.read_source("doc-1")
     assert source is not None

@@ -592,6 +592,47 @@ against a stable snapshot" property are all unchanged, only *which passages get 
       they described the old flat `--max-workers`-only behavior.
 - [x] Full `mypy --strict`/`ruff check .`/`pytest` sweep: 261 passed, no lint/type errors.
 
+### B13. Fix body/index link notation: `[[slug]]` wikilink syntax → standard markdown link (D17, 2026-09-03) — **implemented and verified**
+
+User asked "what names do the three page types' frontmatter use to represent links to other pages" — while
+answering, found and confirmed a real deviation from an already-decided text: D17 (proposal `README.md`)
+explicitly inventories the body-link mechanism as "**標準 markdown link**" (standard markdown link), but the
+actual `MarkdownWriter` implementation rendered every cross-page link as `[[slug]]` — Obsidian/wiki-style
+double-bracket notation, which is *not* standard markdown and doesn't render as a clickable link in GitHub or
+any plain markdown viewer. This is not a new decision — D17's own text already said what the format should
+be — so no new D-number; it's a bug-fix bringing the implementation back in line with the decision it always
+claimed to follow, same pattern as B5–B12 above.
+
+- [x] `adapters/writers/markdown_writer.py`: new `_wiki_link(slug, from_dir, to_dir)` helper renders
+      `[slug](relative/path.md)` — same-directory (`<slug>.md`) when `from_dir == to_dir`, one level over
+      (`../<to_dir>/<slug>.md`) otherwise (the three type directories are flat siblings under the bundle
+      root, so no deeper case exists). Replaces every `f"- [[{slug}]]"` call site: `_render_claim_body`
+      (`related_concepts` → concepts/), `_render_concept_body` (`key_facts` → claims/, `related_pages` →
+      concepts/), `_render_source_body` (`produced_claims` → claims/, `produced_concepts` → concepts/,
+      `related_pages` → sources/), and `_write_type_index` (every `index.md` entry, always same-directory).
+- [x] **Verified against the actual code, not assumed from field names** — this surfaced two pre-existing
+      inconsistencies unrelated to the bracket-vs-markdown question itself, both left as-is (out of scope for
+      a pure notation fix) and documented in `docs/implementation/core-types.md`'s new "How pages link to
+      each other" table:
+      1. `Claim.contradicted_by` is a slug-bearing field but has **no body section at all** — only
+         `Concept.key_facts`/`related_pages`/`Source.produced_claims`/`produced_concepts`/`related_pages`/
+         `Claim.related_concepts` are actually rendered.
+      2. `Concept.related_sources` was already inconsistent with every other link field *before* this
+         fix — rendered as a bare unlinked string (`f"- {src}"`, no brackets at all, deterministic-overrides-
+         LLM), not because it isn't a slug but because the `CompileWikiPages` prompt doesn't require it to
+         resolve like `related_pages` does, and `entities.py`'s own docstring calls it a vaguer "Source/
+         provenance digest link". `domain/query.py`'s graph expansion nonetheless walks it exactly like the
+         other backlink fields. Left unchanged; flagged as a real but separate gap.
+- [x] Updated every place that echoed the old notation: `entities.py`'s `Source.description` docstring,
+      `markdown_writer.py`'s `_source_description` docstring, `docs/implementation/writer.md` (page-format
+      example, body-rendering section, index.md section), `docs/implementation/core-types.md` (new
+      link-mapping table + the one inline mention in "What's not an LLM-editable field").
+- [x] `tests/integration/test_markdown_writer.py` (every `[[slug]]` assertion → `[slug](...)`, cross-directory
+      paths for body sections, same-directory for index entries) + `tests/e2e/test_compile_batch.py` (one
+      body assertion). No test asserted on the literal `related_sources`/`contradicted_by` rendering, so
+      neither needed a change beyond the notation fix itself.
+- [x] Full `mypy --strict`/`ruff check .`/`pytest` sweep: 261 passed, no lint/type errors.
+
 ## C. Test coverage gaps (ASSUMPTIONS.md §C)
 
 - [x] Unit tests for **B-3**: `Writer` incremental backlink maintenance (`key_facts` field) — already covered
